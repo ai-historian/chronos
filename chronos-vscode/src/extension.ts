@@ -349,10 +349,8 @@ export function activate(context: vscode.ExtensionContext): void {
         name: "Chronos",
         cwd: workspaceFolder,
         env: { CHRONOS_IPC_SOCKET: ipcServer.socketPath, ...workspaceEnv },
-        shellPath: "/usr/bin/env",
-        shellArgs: ["pi"],
       });
-
+      terminal.sendText("pi");
       terminal.show(true);
     }),
 
