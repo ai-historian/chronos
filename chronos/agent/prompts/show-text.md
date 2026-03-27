@@ -1,0 +1,1 @@
+Display a text file in the viewer. Optionally highlight a specific passage — the viewer will dim everything else and scroll to it. Use this to show the user a file or draw attention to a particular excerpt.
