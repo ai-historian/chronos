@@ -11,28 +11,40 @@ AI-powered agent for digitizing historical German city directories. Chronos comb
 
 ## Installation
 
-### 1. Install the CLI
+### 1. Install pi (the AI coding agent)
+
+Chronos runs as a package inside [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), an AI coding agent framework. Install it globally:
+
+```bash
+npm install -g @mariozechner/pi-coding-agent
+```
+
+Verify it works:
+
+```bash
+pi --help
+```
+
+### 2. Install the Chronos pi-package
 
 From the project root:
 
 ```bash
+cd chronos
+npm install
+pi install .
+```
+
+This registers the Chronos extension, tools, skills, and prompts with pi.
+
+### 3. Install the VS Code extension
+
+```bash
+cd chronos-vscode
 npm install
 npm run build
-npm install -g .
-```
-
-Or install the pre-built tarball:
-
-```bash
-npm install -g release/chronos-1.0.0.tgz
-```
-
-This makes the `chronos` command available globally.
-
-### 2. Install the VS Code extension
-
-```bash
-code --install-extension release/chronos-0.1.0.vsix
+npm run package
+code --install-extension chronos-0.3.0.vsix
 ```
 
 ## Getting started
@@ -40,15 +52,6 @@ code --install-extension release/chronos-0.1.0.vsix
 ### Initialize a workspace
 
 Open VS Code in an empty folder and run the command **Chronos: Init Workspace** from the command palette (`Ctrl+Shift+P`). This creates the workspace structure and prompts for your Gemini API key.
-
-Alternatively, from the CLI:
-
-```bash
-mkdir my-workspace && cd my-workspace
-chronos --source <path-to-source> --workspace .
-```
-
-The workspace will be scaffolded automatically on first run.
 
 ### Import sources
 
@@ -72,28 +75,22 @@ sources/my-directory/
 
 ### Run the agent
 
-**From VS Code:** Run **Chronos: Start Agent Session**, pick a source, and interact with the agent in the integrated terminal. The page viewer opens automatically.
+**From VS Code (recommended):**
 
-**From the CLI:**
+1. Open a workspace folder in VS Code
+2. Run **Chronos: Start Agent Session** from the command palette
+3. The page viewer opens and a `pi` terminal starts
+4. Type `/select-source` in the terminal to pick a source
+5. The page viewer updates and the agent is ready
 
-```bash
-# Interactive mode
-chronos --source sources/my-directory --workspace .
-
-# Run a specific skill
-chronos --source sources/my-directory --workspace . --task extract-entries
-
-# Specify a model
-chronos --source sources/my-directory --workspace . --model gemini-2.5-pro
-```
-
-**As a web server (multi-session):**
+**From the terminal:**
 
 ```bash
-npm run web -- --workspace . --port 3000
+cd ~/my-workspace
+pi
 ```
 
-Then open `http://localhost:3000` in a browser. The web UI supports multiple concurrent sessions via WebSocket.
+Then type `/select-source` to pick a source and start working.
 
 ## Workspace structure
 
@@ -108,19 +105,12 @@ Then open `http://localhost:3000` in a browser. The web UI supports multiple con
 │   └── <source-name>/       # Per-source extractions, summaries, JSON
 ├── skills/                   # Custom task definitions
 │   └── <skill-name>/
-│       ├── SKILL.md          # Task instructions (required)
-│       └── index.ts          # Custom tools (optional)
+│       └── SKILL.md          # Task instructions
 ├── memory/                   # Persistent memory
-│   ├── MEMORY.md             # Long-term curated notes
-│   ├── YYYY-MM-DD.md         # Daily session logs
+│   ├── MEMORY.MD             # Cross-source insights
 │   └── <source-name>.md     # Per-source findings
 ├── sessions/                 # Conversation history (auto-generated)
-│   ├── <id>.jsonl
-│   ├── <id>.meta.json
-│   └── <id>.enrichment.json
-└── .chronos/                 # Agent identity & config
-    ├── SOUL.md               # Agent personality
-    ├── AGENTS.md             # Workspace conventions
+└── .chronos/
     └── .env                  # GEMINI_API_KEY
 ```
 
@@ -146,35 +136,7 @@ Analyze each page and extract all business entries...
 - `description` — one-line summary
 - `requires` — comma-separated filenames that must exist in the source directory (leave blank if none)
 
-### Custom tools (optional)
-
-Create an `index.ts` alongside `SKILL.md` to register custom tools:
-
-```typescript
-import { Type } from "@sinclair/typebox";
-
-export function createTools(ctx) {
-  return [
-    {
-      name: "validate_entry",
-      label: "Validate Entry",
-      description: "Check an extracted entry against known records",
-      parameters: Type.Object({
-        name: Type.String({ description: "Business name" }),
-      }),
-      async execute(_toolCallId, params) {
-        // Custom logic here
-        return {
-          content: [{ type: "text", text: "Valid" }],
-          details: {},
-        };
-      },
-    },
-  ];
-}
-```
-
-Run a skill with `--task <skill-name>` from the CLI, or select it when starting a session in VS Code/web UI.
+Run a skill by typing `/skill:extract-entries` in the pi terminal.
 
 ## Core tools
 
@@ -192,32 +154,26 @@ The agent has these built-in tools for working with sources:
 
 Standard file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) are also available for working with output files.
 
-## Architecture
+## VS Code commands
 
-```
-┌────────────────────────────────────────────────────┐
-│                  User Interfaces                    │
-│  ┌──────────────┬──────────────┬────────────────┐  │
-│  │  VS Code     │  Web UI      │  CLI (TUI)     │  │
-│  │  Extension   │  Express+WS  │  Interactive   │  │
-│  └──────┬───────┴──────┬───────┴───────┬────────┘  │
-│         │ IPC (socket) │  WebSocket    │ direct     │
-└─────────┼──────────────┼───────────────┼────────────┘
-          ▼              ▼               ▼
-┌────────────────────────────────────────────────────┐
-│              Agent Backend (pi framework)           │
-│  ┌────────────┬──────────────┬──────────────────┐  │
-│  │ Session    │  Tool        │  Vision Model    │  │
-│  │ Manager    │  Registry    │  (Gemini)        │  │
-│  └────────────┴──────────────┴──────────────────┘  │
-└────────────────────────────────────────────────────┘
-```
+| Command | Description |
+|---------|-------------|
+| **Chronos: Init Workspace** | Scaffold workspace structure and set API key |
+| **Chronos: Start Agent Session** | Launch the agent in a terminal with page viewer |
+| **Chronos: Show Page** | Open a specific page in the viewer |
+| **Chronos: Import Sources** | Batch-import files from a folder |
+| **Chronos: Window Setup** | Configure VS Code layout for Chronos |
 
-- **VS Code extension** communicates with the agent over a Unix socket (IPC). It provides the page viewer webview and terminal integration.
-- **Web server** (`npm run web`) serves a browser UI with WebSocket for real-time streaming. Supports multiple concurrent sessions.
-- **CLI** runs the agent directly in the terminal using pi's TUI.
+The extension provides clickable `[view p.N]` links in the terminal — click to open any page in the viewer.
 
-All three interfaces share the same agent backend built on `@mariozechner/pi-coding-agent`.
+## Memory system
+
+The agent maintains persistent memory across sessions:
+
+- **Global memory** (`memory/MEMORY.MD`) — cross-source insights, recurring conventions, abbreviation patterns, lessons learned
+- **Per-source memory** (`memory/<source-name>.md`) — document-specific findings like page ranges, section boundaries, layout observations, and structural notes
+
+Memory files survive session restarts and are loaded automatically when the agent starts or switches sources.
 
 ## Configuration
 
@@ -229,60 +185,34 @@ Set in `.chronos/.env`:
 GEMINI_API_KEY=your-key-here
 ```
 
-### CLI flags
+### pi options
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--source <path>` | Path to source directory (required for CLI) | — |
-| `--task <skill>` | Run a specific skill | — (interactive mode) |
-| `--model <name>` | Override the default model | — |
-| `--workspace <path>` | Workspace root | `./data` |
+pi supports many options natively. Common ones:
 
-### Server flags
+```bash
+# Use a specific model
+pi --model gemini-2.5-pro
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--port <number>` | HTTP server port | `3000` |
-| `--model <name>` | Override the default model | — |
-| `--workspace <path>` | Workspace root | `./data` |
-| `--workspaces-dir <path>` | Parent dir to discover multiple workspaces | — |
+# Continue previous session
+pi -c
 
-## VS Code commands
+# Resume a specific session
+pi -r
+```
 
-| Command | Description |
-|---------|-------------|
-| **Chronos: Init Workspace** | Scaffold workspace structure and set API key |
-| **Chronos: Start Agent Session** | Pick a source and launch the agent |
-| **Chronos: Show Page** | Open a specific page in the viewer |
-| **Chronos: Import Sources** | Batch-import files from a folder |
-| **Chronos: Window Setup** | Configure VS Code layout for Chronos |
-
-The extension also provides clickable `[view p.N]` links in the terminal — click to open any page in the viewer.
-
-## Memory system
-
-The agent maintains persistent memory across sessions:
-
-- **Daily notes** (`memory/YYYY-MM-DD.md`) — raw logs of what happened in each session
-- **Long-term memory** (`MEMORY.md`) — curated decisions, lessons, patterns
-- **Per-source memory** (`memory/<source-name>.md`) — document-specific findings like page ranges, section boundaries, and structural observations
-
-Memory files survive session restarts and are loaded automatically when the agent starts or switches sources.
+Run `pi --help` for the full list.
 
 ## Development
 
 ```bash
-# Run the agent in dev mode (no build step)
-npm start -- --source <path> --workspace <path>
-
-# Run the web server in dev mode
-npm run web -- --workspace <path>
-
-# Build for distribution
-npm run build
+# Build the pi package
+cd chronos && npm run build
 
 # Build the VS Code extension
-cd chronos-vscode && npm install && npm run build
+cd chronos-vscode && npm run build
+
+# Package the VS Code extension
+cd chronos-vscode && npm run package
 ```
 
 ## License

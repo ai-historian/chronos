@@ -2,7 +2,7 @@
   "name": "chronos",
   "displayName": "Chronos — Historical Document Agent",
   "description": "AI-powered assistant for digitizing historical city directories",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "chronos",
   "engines": {
     "vscode": "^1.110.0"

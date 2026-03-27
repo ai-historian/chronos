@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { Type } from "@sinclair/typebox";
-import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type { ToolDefinition, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { listPageIds } from "../utils/page-files.js";
 import type { SourceContext } from "./source-context.js";
 
@@ -11,14 +11,15 @@ const changeSourceParams = Type.Object({
   }),
 });
 
-export function createChangeSourceTool(ctx: SourceContext, dataDir: string, description: string): ToolDefinition<typeof changeSourceParams> {
+export function createChangeSourceTool(ctx: SourceContext, description: string): ToolDefinition<typeof changeSourceParams> {
   return {
     name: "change_source",
     label: "Change Source",
     description,
     parameters: changeSourceParams,
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, extCtx: ExtensionContext) {
       const sourcePath = params.source_path;
+      const workspaceDir = extCtx.cwd;
 
       if (!existsSync(sourcePath)) {
         return {
@@ -38,7 +39,7 @@ export function createChangeSourceTool(ctx: SourceContext, dataDir: string, desc
       // Update shared context
       ctx.sourceDir = sourcePath;
       ctx.sourceName = basename(sourcePath);
-      ctx.sourceDataDir = join(dataDir, "data", ctx.sourceName!);
+      ctx.sourceDataDir = join(workspaceDir, "data", ctx.sourceName!);
       mkdirSync(ctx.sourceDataDir, { recursive: true });
 
       // Gather info about the source
@@ -46,7 +47,7 @@ export function createChangeSourceTool(ctx: SourceContext, dataDir: string, desc
       const pageCount = pages.length;
 
       // Load per-source memory if it exists
-      const memoryPath = join(dataDir, "memory", `${ctx.sourceName!}.md`);
+      const memoryPath = join(workspaceDir, "memory", `${ctx.sourceName!}.md`);
       let documentMemory = "";
       if (existsSync(memoryPath)) {
         documentMemory = readFileSync(memoryPath, "utf-8").trim();

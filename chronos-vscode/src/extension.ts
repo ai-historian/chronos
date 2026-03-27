@@ -82,12 +82,6 @@ async function initWorkspace(folder: string): Promise<boolean> {
   }
 
   // Memory files
-  writeIfMissing(join(folder, "memory", "SOUL.MD"),
-    "You are a helpful document analysis agent. You help users by analyzing scanned pages, " +
-    "answering questions, extracting structured data, and building up knowledge about sources.\n\n" +
-    "You are *NOT a coding agent*. You will use coding tools, but only for the purpose of " +
-    "analyzing documents, answering questions, or fulfilling tasks you are given.\n"
-  );
   writeIfMissing(join(folder, "memory", "MEMORY.MD"), "");
 
   // README
@@ -100,7 +94,8 @@ This folder is a Chronos workspace for digitizing historical documents.
 
 \`\`\`
 sources/          Place your source directories here (each with a png/ subfolder)
-memory/           Agent memory files (SOUL.MD, MEMORY.MD)
+data/             Per-source extraction results and outputs
+memory/           Agent memory files (MEMORY.MD, per-source notes)
 skills/           Skill definitions (markdown task instructions)
 sessions/         Agent session logs (auto-generated)
 .chronos/.env     API keys (GEMINI_API_KEY)
@@ -108,7 +103,9 @@ sessions/         Agent session logs (auto-generated)
 
 ## Getting Started
 
-1. **Add a source**: Create a folder inside \`sources/\` with a \`png/\` subfolder containing page images.
+1. **Install Chronos**: \`pi install chronos\`
+
+2. **Add a source**: Create a folder inside \`sources/\` with a \`png/\` subfolder containing page images.
    Pages should be named \`page_NNNN.png\` (4-digit zero-padded, 1-indexed).
 
    Example:
@@ -118,16 +115,15 @@ sessions/         Agent session logs (auto-generated)
    ...
    \`\`\`
 
-   To convert a PDF to pages, run from the history-agent root:
-   \`\`\`
-   npx tsx agent/tools/pdf-split.ts <path-to-pdf> <output-source-dir>
-   \`\`\`
+   Or use **"Chronos: Import Sources"** to import PDFs and images automatically.
 
-2. **Start a session**: Open the Command Palette (\`Ctrl+Shift+P\`) and run
-   **"Chronos: Start Agent Session"**. Pick a source and the agent will start
-   in a terminal.
+3. **Start a session**: Open the Command Palette (\`Ctrl+Shift+P\`) and run
+   **"Chronos: Start Agent Session"**. This opens a \`pi\` terminal in the workspace.
 
-3. **Browse pages**: Run **"Chronos: Show Page"** to open the page viewer
+4. **Select a source**: Type \`/select-source\` in the terminal to pick a source.
+   The page viewer opens automatically.
+
+5. **Browse pages**: Run **"Chronos: Show Page"** to open the page viewer
    independently.
 
 ## API Key
@@ -336,54 +332,25 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("chronos.startSession", async () => {
       if (!workspaceFolder) {
         vscode.window.showWarningMessage(
-          "Chronos: Open a workspace folder first (this becomes your data directory)."
+          "Chronos: Open a workspace folder first (this becomes your workspace directory)."
         );
         return;
       }
-
-      // Discover sources from the workspace's sources/ subfolder
-      const sourcesDir = join(workspaceFolder, "sources");
-      if (!existsSync(sourcesDir)) {
-        vscode.window.showWarningMessage(
-          `Chronos: No sources/ directory found in ${workspaceFolder}`
-        );
-        return;
-      }
-
-      const sources = discoverSources(sourcesDir);
-      if (sources.length === 0) {
-        vscode.window.showWarningMessage(
-          "Chronos: No sources found (looking for directories with a png/ subfolder)."
-        );
-        return;
-      }
-
-      const picked = await vscode.window.showQuickPick(
-        sources.map((s) => ({ label: s.name, detail: s.path, source: s })),
-        { placeHolder: "Select a source" }
-      );
-      if (!picked) return;
-
-      const sourceDir = picked.source.path;
-      const sourceName = path.basename(sourceDir);
 
       const workspaceEnv = readEnvFile(join(workspaceFolder, ".chronos", ".env"));
-      // Open page viewer immediately on page 1
-      const pages = countPages(sourceDir);
-      if (pages > 0) {
-        pageViewer.showPage(sourceDir, sourceName, 1, null, pages);
-      }
 
+      // Open the page viewer panel immediately (shows empty state until
+      // the user runs /select-source in the pi TUI).
+      pageViewer.ensurePanel();
+
+      // Launch pi in the workspace directory. Source selection happens
+      // at runtime via the /select-source command inside the pi TUI.
       const terminal = vscode.window.createTerminal({
-        name: `Chronos: ${sourceName}`,
+        name: "Chronos",
         cwd: workspaceFolder,
         env: { CHRONOS_IPC_SOCKET: ipcServer.socketPath, ...workspaceEnv },
         shellPath: "/usr/bin/env",
-        shellArgs: [
-          "npx", "chronos",
-          "--source", sourceDir,
-          "--workspace", workspaceFolder,
-        ],
+        shellArgs: ["pi"],
       });
 
       terminal.show(true);

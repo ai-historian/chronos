@@ -22,6 +22,27 @@ export class PageViewerProvider {
   get sourceName(): string | undefined { return this.currentSourceName; }
   get totalPages(): number { return this.lastPage; }
 
+  /** Create the viewer panel in empty state (shows "Waiting for agent..."). */
+  ensurePanel(): void {
+    if (this.panel) return;
+    const resourceRoot = this.workspaceRoot ?? process.cwd();
+    this.panel = vscode.window.createWebviewPanel(
+      "chronos.pageViewer",
+      "Chronos Viewer",
+      { viewColumn: vscode.ViewColumn.Two, preserveFocus: true },
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.file(resourceRoot)],
+      },
+    );
+    this.panel.webview.html = this.getHtml(this.panel.webview);
+    this.panel.onDidDispose(() => {
+      this.panel = undefined;
+    });
+    this.setupMessageHandling();
+  }
+
   showPage(sourceDir: string, sourceName: string, pageId: number, bbox: Bbox | null, totalPages?: number): void {
     this.currentSourceDir = sourceDir;
     this.currentSourceName = sourceName || this.currentSourceName;

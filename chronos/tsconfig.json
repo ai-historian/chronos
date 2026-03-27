@@ -6,13 +6,18 @@
     "esModuleInterop": true,
     "strict": true,
     "outDir": "dist",
-    "rootDir": "agent",
+    "rootDir": ".",
     "declaration": true,
     "sourceMap": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["agent/**/*"],
-  "exclude": ["node_modules", "dist", "old_agent"]
+  "include": [
+    "extensions/**/*",
+    "tools/**/*",
+    "utils/**/*",
+    "ipc/**/*"
+  ],
+  "exclude": ["node_modules", "dist"]
 }

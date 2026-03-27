@@ -60,7 +60,7 @@ sources with page counts, and lets the user pick one interactively. The selectio
 shared `SourceContext` and informs the model. The existing `change_source` tool remains for cases
 where the model switches sources on its own.
 
-**System prompt via `before_agent_start`.** The Chronos system prompt (SOUL, workspace
+**System prompt via `before_agent_start`.** The Chronos system prompt (agent identity, workspace
 conventions, tool descriptions, memory, current source state) is injected on every turn via the
 `before_agent_start` event hook. The workspace root is always `ctx.cwd`. The template is
 rewritten to explain the workspace folder structure, the VS Code integration features, and all
@@ -89,7 +89,7 @@ Chronos tools — so the agent understands the full environment it is operating 
 | Skills | User-authored in `<workspace>/skills/` | Shipped built-in skills in `skills/` + user workspace skills |
 | Bash confirmation | `tool_call` hook in `extension.ts` | Same |
 | `noExtensions: true` | Blocks all other extensions | Dropped — composability is a feature |
-| `agentsFilesOverride` | Blocks pi's AGENTS.md discovery | Dropped — pi discovers workspace files normally |
+| `agentsFilesOverride` | Blocks pi's AGENTS.md discovery | Dropped — conventions are in `system-prompt.md` |
 
 ---
 
@@ -129,7 +129,6 @@ chronos/
 │   ├── page-expert-prompt.md
 │   ├── show-page.md
 │   ├── show-text.md
-│   ├── soul.md           ← default soul (still used as fallback)
 │   └── system-prompt.md  ← REWRITTEN (see Step 7)
 └── skills/               ← NEW: built-in shipped skills
 ```
@@ -140,7 +139,8 @@ Files deleted:
 - `agent/create-session.ts`
 - `agent/system-prompt.ts`
 - `agent/extension.ts`
-- `agent/prompts/agents.md` — replaced by pi's own AGENTS.md discovery
+- `agent/prompts/soul.md` — content folded into `system-prompt.md`
+- `agent/prompts/agents.md` — content folded into `system-prompt.md`
 
 ---
 
@@ -376,17 +376,10 @@ turn, so changes the agent made in the previous turn are visible immediately.
 import { readFileSync, existsSync } from "node:fs";
 
 function buildChronosSystemPrompt(sourceCtx: SourceContext, cwd: string): string {
-  const chronosDir = join(cwd, ".chronos");
-  const memoryDir  = join(cwd, "memory");
-  const skillsDir  = join(cwd, "skills");
-  const dataDir    = join(cwd, "data");
-
-  function loadWithFallback(primary: string, fallback: string): string {
-    return readFileSync(existsSync(primary) ? primary : fallback, "utf-8").trim();
-  }
-
-  const soul     = loadWithFallback(join(chronosDir, "SOUL.MD"), join(PROMPTS_DIR, "soul.md"));
-  const template = readFileSync(join(PROMPTS_DIR, "system-prompt.md"), "utf-8");
+  const memoryDir = join(cwd, "memory");
+  const skillsDir = join(cwd, "skills");
+  const dataDir   = join(cwd, "data");
+  const template  = readFileSync(join(PROMPTS_DIR, "system-prompt.md"), "utf-8");
 
   const resolvedSourceDir  = sourceCtx.sourceDir  ?? "(no source selected — use /select-source)";
   const resolvedSourceName = sourceCtx.sourceName ?? "(no source selected)";
@@ -406,7 +399,6 @@ function buildChronosSystemPrompt(sourceCtx: SourceContext, cwd: string): string
   if (existsSync(gmp)) globalMemory = readFileSync(gmp, "utf-8").trim();
 
   return template
-    .replaceAll("{{soul}}",             soul)
     .replaceAll("{{workspaceDir}}",     cwd)
     .replaceAll("{{sourceDir}}",        resolvedSourceDir)
     .replaceAll("{{sourceName}}",       resolvedSourceName)
@@ -440,16 +432,13 @@ Rewrite it to explicitly explain:
 Below is the full structure of the new `system-prompt.md`:
 
 ```markdown
-{{soul}}
-
 ## What you are
 
-You are running inside a Chronos workspace. Chronos is a document digitization environment for
-historical sources (scanned city directories, registries, etc.). You help analyze page images,
-extract structured data, and build up knowledge about archival sources.
+You are a document analysis agent. You help users analyze scanned pages, extract structured
+data, and build up knowledge about archival sources (historical city directories, registries, etc.).
 
-You are NOT a general coding agent. You use file tools only to read/write outputs and memory —
-not to write application code.
+You are NOT a general coding agent. You use file tools only to read and write outputs and
+memory — not to write application code.
 
 ## Workspace layout
 
@@ -462,7 +451,7 @@ Your working directory IS the workspace root: `{{workspaceDir}}`
 | `memory/` | Your persistent memory. `MEMORY.MD` for cross-source insights. `<source-name>.md` for per-source findings. |
 | `skills/` | Task instructions. Each skill is a `SKILL.md` file in a named subdirectory. |
 | `sessions/` | Conversation history (auto-managed, do not edit). |
-| `.chronos/` | Workspace identity: `SOUL.MD` (your personality), `AGENTS.md` (conventions), `.env` (API key). |
+| `.chronos/` | API key only (`.env`). |
 
 **Source data** for the current source goes in `{{sourceDataDir}}/`.
 Never write output files directly into the source directory (`{{sourceDir}}/`).
@@ -551,13 +540,12 @@ Source memory: `{{sourceMemoryPath}}`
 Skills directory: `{{skillsDir}}/`
 ```
 
-The key additions over the old template are:
+The key changes from the old template:
+- **Soul and workspace conventions are inlined** — no `{{soul}}` or `{{agents}}` variables, no `.chronos/SOUL.MD` or `.chronos/AGENTS.md` files
 - **Workspace layout table** — the agent understands every folder's purpose
 - **VS Code integration section** — explains the page viewer, clickable links, how tools interact with it
 - **Expanded tool reference** — every tool with parameters and usage notes in one place
 - **Global memory** injected alongside source memory
-- Dropped the AGENTS.md variable substitution — pi now discovers `.chronos/AGENTS.md` natively
-  (or the user can put it in `.pi/AGENTS.md`); no need to inject it manually
 
 ---
 
@@ -645,7 +633,8 @@ rm agent/config.ts
 rm agent/create-session.ts
 rm agent/system-prompt.ts
 rm agent/extension.ts
-rm agent/prompts/agents.md    # replaced by native AGENTS.md discovery
+rm agent/prompts/soul.md      # content folded into system-prompt.md
+rm agent/prompts/agents.md    # content folded into system-prompt.md
 rmdir agent/                  # if empty
 ```
 
@@ -741,9 +730,8 @@ behavior — composability. If a user's extension conflicts with a Chronos tool 
 filter packages via pi settings.
 
 **`agentsFilesOverride`**
-Pi now discovers `.chronos/AGENTS.md` (or `.pi/AGENTS.md`) normally. The workspace conventions
-the agent needs come from two places: the `system-prompt.md` template (injected via
-`before_agent_start`) and the workspace's own `AGENTS.md` file. Both coexist cleanly.
+Dropped. Workspace conventions are now part of `system-prompt.md` itself, injected via
+`before_agent_start`. There is no separate `AGENTS.md` to discover or suppress.
 
 **`--task` flag**
 Replaced by `/skill:name`. This is strictly better: it shows in autocomplete, describes the
