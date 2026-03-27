@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.js.map
+chronos-vscode/node_modules/
+chronos-vscode/out/
+*.tgz
+*.vsix

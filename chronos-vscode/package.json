@@ -1,0 +1,53 @@
+{
+  "name": "chronos",
+  "displayName": "Chronos — Historical Document Agent",
+  "description": "AI-powered assistant for digitizing historical city directories",
+  "version": "0.2.0",
+  "publisher": "chronos",
+  "engines": {
+    "vscode": "^1.110.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onCommand:chronos.startSession"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "chronos.startSession",
+        "title": "Chronos: Start Agent Session"
+      },
+      {
+        "command": "chronos.showPage",
+        "title": "Chronos: Show Page"
+      },
+      {
+        "command": "chronos.init",
+        "title": "Chronos: Init Workspace"
+      },
+      {
+        "command": "chronos.importSources",
+        "title": "Chronos: Import Sources"
+      },
+      {
+        "command": "chronos.windowSetup",
+        "title": "Chronos: Window Setup"
+      }
+    ],
+    "configuration": {
+      "title": "Chronos",
+      "properties": {}
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.110.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.25.0"
+  }
+}

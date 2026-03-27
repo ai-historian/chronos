@@ -1,0 +1,1 @@
+Ask a follow-up question to the page expert about the last page analyzed with ask_page. Continues the same conversation — the image does not need to be re-sent. Use this for clarifying questions, e.g. 'Which fields were ambiguous?' or 'What does the abbreviation X mean?'. Requires ask_page to have been called first.
