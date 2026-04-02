@@ -2,6 +2,8 @@
 
 AI-powered agent for digitizing historical German city directories. Chronos combines a document analysis agent with a VS Code extension to analyze scanned page images, extract structured data, and build knowledge about archival sources.
 
+![Chronos demo](demo.png)
+
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) (v18+)
