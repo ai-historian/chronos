@@ -4,6 +4,11 @@
   "description": "AI-powered assistant for digitizing historical city directories",
   "version": "0.3.0",
   "publisher": "chronos",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ai-historian/chronos"
+  },
   "engines": {
     "vscode": "^1.110.0"
   },
@@ -45,7 +50,11 @@
     "watch": "node esbuild.mjs --watch",
     "package": "vsce package"
   },
+  "dependencies": {
+    "mupdf": "^1.27.0"
+  },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "@types/vscode": "^1.110.0",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.25.0"

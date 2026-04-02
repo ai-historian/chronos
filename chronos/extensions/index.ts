@@ -17,7 +17,7 @@ import { loadToolText, loadPromptFile } from "../utils/tool-loader.js";
 import { listPageIds } from "../utils/page-files.js";
 import { discoverSources } from "../utils/source-discovery.js";
 import { ensureWorkspace } from "../utils/workspace.js";
-import { connectIpc, sendToExtension, disconnectIpc } from "../ipc/ipc-client.js";
+import { connectHttp, sendToExtension, disconnectHttp } from "../http/http-client.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -97,11 +97,11 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     ensureWorkspace(ctx.cwd);
-    connectIpc();
+    connectHttp();
   });
 
   pi.on("session_shutdown", async () => {
-    disconnectIpc();
+    disconnectHttp();
   });
 
   pi.on("session_directory", async (event) => {

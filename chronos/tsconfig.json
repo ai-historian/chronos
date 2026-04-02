@@ -17,7 +17,7 @@
     "extensions/**/*",
     "tools/**/*",
     "utils/**/*",
-    "ipc/**/*"
+    "http/**/*"
   ],
   "exclude": ["node_modules", "dist"]
 }

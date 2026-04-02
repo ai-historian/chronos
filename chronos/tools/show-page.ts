@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { pageIdToPath, listPageIds } from "../utils/page-files.js";
-import { sendToExtension } from "../ipc/ipc-client.js";
+import { sendToExtension } from "../http/http-client.js";
 import type { SourceContext } from "./source-context.js";
 import { requireSource } from "./source-context.js";
 
@@ -48,9 +48,14 @@ export function createShowPageTool(ctx: SourceContext, description: string): Too
         bbox: params.bbox ?? null,
       });
 
+      const bbox = params.bbox ?? null;
+      const viewLink = bbox
+        ? `[view p.${pageId}] [view p.${pageId} selection:${bbox.x},${bbox.y},${bbox.w},${bbox.h}]`
+        : `[view p.${pageId}]`;
+
       return {
-        content: [{ type: "text", text: `[view p.${pageId}]` }],
-        details: { pageId, bbox: params.bbox ?? null },
+        content: [{ type: "text", text: viewLink }],
+        details: { pageId, bbox },
       };
     },
   };

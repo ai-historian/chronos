@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve, isAbsolute, join } from "node:path";
+import { resolve, isAbsolute, join, basename } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { sendToExtension } from "../http/http-client.js";
 import type { SourceContext } from "./source-context.js";
 import { requireSource } from "./source-context.js";
 
@@ -39,6 +40,14 @@ export function createShowTextTool(ctx: SourceContext, description: string): Too
       const content = readFileSync(filePath, "utf-8");
       const highlightFound =
         params.highlight == null || content.includes(params.highlight);
+
+      sendToExtension({
+        type: "show_text",
+        filePath,
+        content,
+        highlight: params.highlight ?? null,
+        sourceName: ctx.sourceName ?? basename(filePath),
+      });
 
       return {
         content: [

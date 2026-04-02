@@ -6,3 +6,6 @@ chronos-vscode/node_modules/
 chronos-vscode/out/
 *.tgz
 *.vsix
+*.html
+paper.md
+win-vm.md

@@ -99,6 +99,40 @@ export class PageViewerProvider {
     this.panel.title = `chronos-viewer - p.${pageId}${this.currentSourceName ? ` - ${this.currentSourceName}` : ""}`;
   }
 
+  showText(filePath: string, content: string, highlight: string | null, sourceName: string): void {
+    this.currentSourceName = sourceName;
+
+    if (!this.panel) {
+      const resourceRoot = this.workspaceRoot ?? process.cwd();
+      this.panel = vscode.window.createWebviewPanel(
+        "chronos.pageViewer",
+        `${sourceName} — Text`,
+        { viewColumn: vscode.ViewColumn.Two, preserveFocus: true },
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+          localResourceRoots: [vscode.Uri.file(resourceRoot)],
+        }
+      );
+      this.panel.webview.html = this.getHtml(this.panel.webview);
+      this.panel.onDidDispose(() => {
+        this.panel = undefined;
+      });
+      this.setupMessageHandling();
+    }
+
+    this.panel.webview.postMessage({
+      type: "show_text",
+      filePath,
+      content,
+      highlight,
+      sourceName,
+    });
+
+    const fileName = path.basename(filePath);
+    this.panel.title = `chronos-viewer - ${fileName}${sourceName ? ` - ${sourceName}` : ""}`;
+  }
+
   setPageRange(firstPage: number, lastPage: number): void {
     this.firstPage = firstPage;
     this.lastPage = lastPage;
@@ -173,16 +207,15 @@ export class PageViewerProvider {
       flex: 1;
       overflow: auto;
       position: relative;
-      display: flex;
-      justify-content: center;
     }
     .image-wrapper {
       position: relative;
-      transform-origin: top center;
+      display: inline-block;
     }
     .image-wrapper img {
       display: block;
       max-width: none;
+      height: auto;
     }
     .bbox-overlay {
       position: absolute;
@@ -190,6 +223,32 @@ export class PageViewerProvider {
       background: rgba(255, 102, 0, 0.15);
       pointer-events: none;
       display: none;
+    }
+    .text-container {
+      flex: 1;
+      overflow: auto;
+      padding: 16px 20px;
+      display: none;
+    }
+    .text-container pre {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: var(--vscode-editor-font-size, 13px);
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      margin: 0;
+      color: var(--vscode-editor-foreground);
+    }
+    .text-container mark {
+      background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+      color: inherit;
+      border-radius: 2px;
+      padding: 1px 0;
+    }
+    .text-container .file-label {
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
+      margin-bottom: 8px;
     }
     .empty-state {
       display: flex;
@@ -222,6 +281,11 @@ export class PageViewerProvider {
       <img id="pageImage" alt="Page">
       <div class="bbox-overlay" id="bboxOverlay"></div>
     </div>
+    <canvas id="cropCanvas" style="display:none;"></canvas>
+  </div>
+  <div class="text-container" id="textContainer">
+    <div class="file-label" id="textFileLabel"></div>
+    <pre id="textContent"></pre>
   </div>
 
   <script nonce="${nonce}">
@@ -235,12 +299,19 @@ export class PageViewerProvider {
     const totalPagesEl = document.getElementById("totalPages");
     const zoomLevelEl = document.getElementById("zoomLevel");
     const sourceLabel = document.getElementById("sourceLabel");
+    const textContainer = document.getElementById("textContainer");
+    const textContent = document.getElementById("textContent");
+    const textFileLabel = document.getElementById("textFileLabel");
+
+    const cropCanvas = document.getElementById("cropCanvas");
+    const cropCtx = cropCanvas.getContext("2d");
 
     let currentPageId = 1;
     let firstPage = 1;
     let lastPage = 1;
     let zoom = 100;
     let currentBbox = null;
+    let showingCrop = false;
 
     function navigate(pageId) {
       pageId = Math.max(firstPage, Math.min(lastPage, pageId));
@@ -248,8 +319,23 @@ export class PageViewerProvider {
     }
 
     function updateZoom() {
-      imageWrapper.style.transform = "scale(" + (zoom / 100) + ")";
+      const displayEl = showingCrop ? cropCanvas : pageImage;
+      const natW = showingCrop ? cropCanvas.width : pageImage.naturalWidth;
+      if (natW > 0) {
+        displayEl.style.width = (natW * zoom / 100) + "px";
+        displayEl.style.height = "auto";
+      }
       zoomLevelEl.textContent = zoom + "%";
+    }
+
+    function fitToWidth() {
+      const displayEl = showingCrop ? cropCanvas : pageImage;
+      const natW = showingCrop ? cropCanvas.width : pageImage.naturalWidth;
+      if (natW > 0) {
+        zoom = Math.round((viewerContainer.clientWidth / natW) * 100);
+        zoom = Math.max(25, Math.min(400, zoom));
+      }
+      updateZoom();
     }
 
     function updateNav() {
@@ -260,31 +346,47 @@ export class PageViewerProvider {
       document.getElementById("next10").disabled = currentPageId >= lastPage;
     }
 
-    function showBbox(bbox) {
+    function showCrop(bbox) {
       if (!bbox) {
-        bboxOverlay.style.display = "none";
         currentBbox = null;
+        showingCrop = false;
+        cropCanvas.style.display = "none";
+        pageImage.style.display = "block";
+        bboxOverlay.style.display = "none";
         return;
       }
       currentBbox = bbox;
-      // Position after image loads
-      const img = pageImage;
-      if (img.naturalWidth > 0) {
-        applyBbox(img.naturalWidth, img.naturalHeight, bbox);
+      if (pageImage.naturalWidth > 0 && pageImage.complete) {
+        applyCrop(bbox);
       }
     }
 
-    function applyBbox(natW, natH, bbox) {
-      bboxOverlay.style.left = (bbox.x * natW) + "px";
-      bboxOverlay.style.top = (bbox.y * natH) + "px";
-      bboxOverlay.style.width = (bbox.w * natW) + "px";
-      bboxOverlay.style.height = (bbox.h * natH) + "px";
-      bboxOverlay.style.display = "block";
+    function applyCrop(bbox) {
+      const natW = pageImage.naturalWidth;
+      const natH = pageImage.naturalHeight;
+      const sx = bbox.x * natW;
+      const sy = bbox.y * natH;
+      const sw = bbox.w * natW;
+      const sh = bbox.h * natH;
+      cropCanvas.width = sw;
+      cropCanvas.height = sh;
+      cropCtx.drawImage(pageImage, sx, sy, sw, sh, 0, 0, sw, sh);
+
+      showingCrop = true;
+      pageImage.style.display = "none";
+      bboxOverlay.style.display = "none";
+      cropCanvas.style.display = "block";
+      fitToWidth();
     }
 
     pageImage.onload = function() {
       if (currentBbox) {
-        applyBbox(pageImage.naturalWidth, pageImage.naturalHeight, currentBbox);
+        applyCrop(currentBbox);
+      } else {
+        showingCrop = false;
+        cropCanvas.style.display = "none";
+        pageImage.style.display = "block";
+        fitToWidth();
       }
     };
 
@@ -308,13 +410,7 @@ export class PageViewerProvider {
     // Zoom buttons
     document.getElementById("zoomOut").onclick = () => { zoom = Math.max(25, zoom - 25); updateZoom(); };
     document.getElementById("zoomIn").onclick = () => { zoom = Math.min(400, zoom + 25); updateZoom(); };
-    document.getElementById("zoomFit").onclick = () => {
-      if (pageImage.naturalWidth > 0) {
-        zoom = Math.round((viewerContainer.clientWidth / pageImage.naturalWidth) * 100);
-        zoom = Math.max(25, Math.min(400, zoom));
-        updateZoom();
-      }
-    };
+    document.getElementById("zoomFit").onclick = () => { fitToWidth(); };
 
     // Ctrl+scroll to zoom
     viewerContainer.addEventListener("wheel", (e) => {
@@ -338,14 +434,34 @@ export class PageViewerProvider {
       if (msg.type === "show_page") {
         emptyState.style.display = "none";
         imageWrapper.style.display = "block";
+        textContainer.style.display = "none";
+        viewerContainer.style.display = "block";
         pageImage.src = msg.imageUri;
         currentPageId = msg.pageId;
         firstPage = msg.firstPage;
         lastPage = msg.lastPage;
         totalPagesEl.textContent = lastPage;
         sourceLabel.textContent = msg.sourceName || "";
-        showBbox(msg.bbox);
+        showCrop(msg.bbox);
         updateNav();
+      } else if (msg.type === "show_text") {
+        emptyState.style.display = "none";
+        imageWrapper.style.display = "none";
+        viewerContainer.style.display = "none";
+        textContainer.style.display = "block";
+        const fileName = msg.filePath.split(/[/\\\\]/).pop() || msg.filePath;
+        textFileLabel.textContent = fileName;
+        if (msg.highlight && msg.content.includes(msg.highlight)) {
+          const escaped = msg.content.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+          const hlEscaped = msg.highlight.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+          textContent.innerHTML = escaped.replaceAll(hlEscaped, "<mark>" + hlEscaped + "<" + "/mark>");
+          // Scroll to first highlight
+          const firstMark = textContent.querySelector("mark");
+          if (firstMark) firstMark.scrollIntoView({ block: "center" });
+        } else {
+          textContent.textContent = msg.content;
+        }
+        sourceLabel.textContent = msg.sourceName || "";
       } else if (msg.type === "update_range") {
         firstPage = msg.firstPage;
         lastPage = msg.lastPage;

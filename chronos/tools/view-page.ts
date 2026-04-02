@@ -100,19 +100,23 @@ export function createAnalyzePageTool(
 
       const bbox = params.bbox ?? null;
 
+      const viewLink = bbox
+        ? `[view p.${pageId}] [view p.${pageId} selection:${bbox.x},${bbox.y},${bbox.w},${bbox.h}]`
+        : `[view p.${pageId}]`;
+
       if (params.output_file) {
         const dataDir = requireSourceDataDir(ctx);
         mkdirSync(dataDir, { recursive: true });
         const outPath = join(dataDir, params.output_file);
         writeFileSync(outPath, text || "(empty response)", "utf-8");
         return {
-          content: [{ type: "text", text: `[view p.${pageId}] → ${params.output_file}` }],
+          content: [{ type: "text", text: `${viewLink} → ${params.output_file}` }],
           details: { model: modelId, pageId, bbox, cost: costStr, path: outPath },
         };
       }
 
       return {
-        content: [{ type: "text", text: `[view p.${pageId}]\n${text || "(empty response)"}` }],
+        content: [{ type: "text", text: `${viewLink}\n${text || "(empty response)"}` }],
         details: { model: modelId, pageId, bbox, cost: costStr },
       };
     },

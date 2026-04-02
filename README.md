@@ -7,7 +7,6 @@ AI-powered agent for digitizing historical German city directories. Chronos comb
 - [Node.js](https://nodejs.org/) (v18+)
 - [VS Code](https://code.visualstudio.com/) (v1.110+)
 - A [Gemini API key](https://aistudio.google.com/apikey) for the vision model
-- `mutool` (from [MuPDF](https://mupdf.com/)) if importing PDFs
 
 ## Installation
 
@@ -44,136 +43,37 @@ cd chronos-vscode
 npm install
 npm run build
 npm run package
-code --install-extension chronos-0.3.0.vsix
 ```
+
+Install the packaged extension:
+
+```bash
+# Linux / macOS
+code --install-extension chronos-0.3.0.vsix
+
+# Windows (use code.cmd so the CLI runs instead of launching the GUI)
+code.cmd --install-extension chronos-0.3.0.vsix
+```
+
+Alternatively, open VS Code, go to the Extensions sidebar, click the `···` menu, choose **Install from VSIX…**, and select the file.
 
 ## Getting started
 
-### Initialize a workspace
+### 1. Initialize a workspace
 
-Open VS Code in an empty folder and run the command **Chronos: Init Workspace** from the command palette (`Ctrl+Shift+P`). This creates the workspace structure and prompts for your Gemini API key.
+Open VS Code in an empty folder. Press `Ctrl+Shift+P` and run **Chronos: Init Workspace**. This creates the workspace structure and prompts for your Gemini API key.
 
-### Import sources
+### 2. Import sources
 
-Sources are directories containing scanned page images. You can import them through VS Code or place them manually.
+Press `Ctrl+Shift+P` and run **Chronos: Import Sources**. Select a folder containing your source material — PDFs, images (PNG, JPG, TIFF, BMP), or text files. Each file within the folder is treated as a source. PDFs are automatically converted to page images. You can import additional sources at any time by running the command again.
 
-**Via VS Code:** Run **Chronos: Import Sources** and select a folder. Supported formats:
+### 3. Start the agent
 
-- **PDF** — converted to PNGs at 200 DPI via `mutool` (one page per file)
-- **Images** (PNG, JPG, TIFF, BMP) — copied into the source's `png/` directory
-- **Text files** — copied to the source root
+Press `Ctrl+Shift+P` and run **Chronos: Start Agent Session**. The page viewer opens and a `pi` terminal starts.
 
-**Manually:** Create a directory under `sources/` with a `png/` subdirectory containing page images named `page_NNNN.png` (or `.jpg`/`.jpeg`):
+On first startup, type `/login` in the terminal to log into your AI provider account (e.g. Anthropic, Google). Without this, no models will be available.
 
-```
-sources/my-directory/
-  png/
-    page_0001.png
-    page_0002.png
-    ...
-```
-
-### Run the agent
-
-**From VS Code (recommended):**
-
-1. Open a workspace folder in VS Code
-2. Run **Chronos: Start Agent Session** from the command palette
-3. The page viewer opens and a `pi` terminal starts
-4. Type `/select-source` in the terminal to pick a source
-5. The page viewer updates and the agent is ready
-
-**From the terminal:**
-
-```bash
-cd ~/my-workspace
-pi
-```
-
-Then type `/select-source` to pick a source and start working.
-
-## Workspace structure
-
-```
-<workspace>/
-├── sources/                  # Scanned page images
-│   └── <source-name>/
-│       └── png/
-│           ├── page_0001.png
-│           └── ...
-├── data/                     # Outputs
-│   └── <source-name>/       # Per-source extractions, summaries, JSON
-├── skills/                   # Custom task definitions
-│   └── <skill-name>/
-│       └── SKILL.md          # Task instructions
-├── memory/                   # Persistent memory
-│   ├── MEMORY.MD             # Cross-source insights
-│   └── <source-name>.md     # Per-source findings
-├── sessions/                 # Conversation history (auto-generated)
-└── .chronos/
-    └── .env                  # GEMINI_API_KEY
-```
-
-## Skills
-
-Skills are self-contained task definitions that tell the agent what to do. They live in `skills/<skill-name>/`.
-
-### SKILL.md format
-
-```yaml
----
-name: Extract Business Entries
-description: Extract business names, addresses, and trades from directory pages
-requires: schema.json
----
-
-# Instructions for the agent
-
-Analyze each page and extract all business entries...
-```
-
-- `name` — human-readable name shown in the UI
-- `description` — one-line summary
-- `requires` — comma-separated filenames that must exist in the source directory (leave blank if none)
-
-Run a skill by typing `/skill:extract-entries` in the pi terminal.
-
-## Core tools
-
-The agent has these built-in tools for working with sources:
-
-| Tool | Description |
-|------|-------------|
-| `list_pages` | List available page IDs in the current source |
-| `analyze_page` | Send a page image to the vision model with a prompt |
-| `follow_up_question` | Continue the conversation about the last analyzed page (avoids re-sending the image) |
-| `show_page` | Display a page in the viewer without analysis |
-| `show_text` | Display a text file in the viewer |
-| `ask_pages_batch` | Batch-process multiple pages (requires explicit user confirmation) |
-| `change_source` | Switch to a different source at runtime |
-
-Standard file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) are also available for working with output files.
-
-## VS Code commands
-
-| Command | Description |
-|---------|-------------|
-| **Chronos: Init Workspace** | Scaffold workspace structure and set API key |
-| **Chronos: Start Agent Session** | Launch the agent in a terminal with page viewer |
-| **Chronos: Show Page** | Open a specific page in the viewer |
-| **Chronos: Import Sources** | Batch-import files from a folder |
-| **Chronos: Window Setup** | Configure VS Code layout for Chronos |
-
-The extension provides clickable `[view p.N]` links in the terminal — click to open any page in the viewer.
-
-## Memory system
-
-The agent maintains persistent memory across sessions:
-
-- **Global memory** (`memory/MEMORY.MD`) — cross-source insights, recurring conventions, abbreviation patterns, lessons learned
-- **Per-source memory** (`memory/<source-name>.md`) — document-specific findings like page ranges, section boundaries, layout observations, and structural notes
-
-Memory files survive session restarts and are loaded automatically when the agent starts or switches sources.
+Type `/select-source` to pick a source and begin working.
 
 ## Configuration
 
@@ -202,18 +102,9 @@ pi -r
 
 Run `pi --help` for the full list.
 
-## Development
+## Documentation
 
-```bash
-# Build the pi package
-cd chronos && npm run build
-
-# Build the VS Code extension
-cd chronos-vscode && npm run build
-
-# Package the VS Code extension
-cd chronos-vscode && npm run package
-```
+See [DOCS.md](DOCS.md) for technical details on workspace structure, tools, skills, memory, and the VS Code extension.
 
 ## License
 

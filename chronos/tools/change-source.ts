@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { ToolDefinition, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { listPageIds } from "../utils/page-files.js";
+import { sendToExtension } from "../http/http-client.js";
 import type { SourceContext } from "./source-context.js";
 
 const changeSourceParams = Type.Object({
@@ -42,9 +43,18 @@ export function createChangeSourceTool(ctx: SourceContext, description: string):
       ctx.sourceDataDir = join(workspaceDir, "data", ctx.sourceName!);
       mkdirSync(ctx.sourceDataDir, { recursive: true });
 
-      // Gather info about the source
+      // Gather info about the source and notify the VS Code viewer
       const pages = listPageIds(sourcePath);
       const pageCount = pages.length;
+
+      sendToExtension({
+        type: "show_page",
+        pageId: 1,
+        totalPages: pageCount,
+        sourceDir: sourcePath,
+        sourceName: ctx.sourceName!,
+        bbox: null,
+      });
 
       // Load per-source memory if it exists
       const memoryPath = join(workspaceDir, "memory", `${ctx.sourceName!}.md`);

@@ -3,13 +3,16 @@ import * as esbuild from "esbuild";
 const watch = process.argv.includes("--watch");
 
 const ctx = await esbuild.context({
-  entryPoints: ["src/extension.ts"],
+  entryPoints: {
+    extension: "src/extension.ts",
+    "pdf-worker": "src/pdf-worker.ts",
+  },
   bundle: true,
-  outfile: "out/extension.js",
+  outdir: "out",
   format: "cjs",
   platform: "node",
   target: "node18",
-  external: ["vscode"],
+  external: ["vscode", "mupdf"],
   sourcemap: true,
   minify: false,
 });

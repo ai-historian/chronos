@@ -2,12 +2,9 @@ import * as vscode from "vscode";
 import * as path from "path";
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync } from "node:fs";
 import { join, relative, extname, basename } from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { cpus } from "node:os";
-
-const execFileAsync = promisify(execFile);
-import { IpcServer } from "./ipc-server";
+import { Worker } from "node:worker_threads";
+// mupdf is ESM-only — loaded via dynamic import() where needed
+import { HttpServer } from "./http-server";
 import { PageViewerProvider } from "./page-viewer";
 
 function countPages(sourceDir: string): number {
@@ -194,43 +191,73 @@ async function importFile(
     mkdirSync(pngDir, { recursive: true });
     progress(`Converting PDF: ${sourceName}...`);
     try {
-      // Get page count
-      let totalPages = 0;
-      try {
-        const { stdout } = await execFileAsync("mutool", ["info", filePath]);
-        const match = stdout.match(/^Pages:\s+(\d+)/m);
-        if (match) totalPages = parseInt(match[1], 10);
-      } catch {
-        // Fall through — single-shot conversion below
-      }
+      const mupdf = await import("mupdf");
+      // Open by filename — mupdf uses memory-mapped I/O, much less RAM than loading a buffer
+      const doc = mupdf.Document.openDocument(filePath, "application/pdf");
+      const totalPages = doc.countPages();
 
       if (totalPages <= 1) {
-        // Single page or unknown count — convert in one call
-        progress(`Converting PDF: ${sourceName}...`);
-        await execFileAsync("mutool", [
-          "draw", "-o", join(pngDir, "page_%04d.png"), "-r", "200", "-q", filePath,
-        ], { maxBuffer: 10 * 1024 * 1024 });
+        // Render directly — no worker overhead
+        const dpi = 200;
+        const scale = dpi / 72;
+        for (let i = 0; i < totalPages; i++) {
+          const page = doc.loadPage(i);
+          const pixmap = page.toPixmap(
+            mupdf.Matrix.scale(scale, scale),
+            mupdf.ColorSpace.DeviceRGB,
+            false,
+          );
+          const pageNum = String(i + 1).padStart(4, "0");
+          writeFileSync(join(pngDir, `page_${pageNum}.png`), pixmap.asPNG());
+        }
       } else {
-        // Split into chunks and convert in parallel
-        const workers = Math.min(cpus().length, totalPages);
-        const chunkSize = Math.ceil(totalPages / workers);
+        // Worker pool: run max POOL_SIZE workers concurrently, each renders a
+        // batch of pages. Workers load the original PDF but only render their
+        // assigned range, then exit to free memory before the next batch starts.
+        const POOL_SIZE = 4;
+        const BATCH_SIZE = 50;
+        const workerScript = join(__dirname, "pdf-worker.js");
         let completed = 0;
 
-        const chunks: { start: number; end: number }[] = [];
-        for (let i = 0; i < totalPages; i += chunkSize) {
-          chunks.push({ start: i + 1, end: Math.min(i + chunkSize, totalPages) });
+        const batches: { start: number; end: number }[] = [];
+        for (let i = 0; i < totalPages; i += BATCH_SIZE) {
+          batches.push({ start: i, end: Math.min(i + BATCH_SIZE, totalPages) });
         }
 
-        progress(`Converting PDF: ${sourceName} (${totalPages} pages, ${chunks.length} workers)...`);
+        progress(`Converting PDF: ${sourceName} (${totalPages} pages, pool of ${POOL_SIZE})...`);
 
-        await Promise.all(chunks.map(async ({ start, end }) => {
-          await execFileAsync("mutool", [
-            "draw", "-o", join(pngDir, "page_%04d.png"), "-r", "200", "-q",
-            filePath, `${start}-${end}`,
-          ], { maxBuffer: 10 * 1024 * 1024 });
-          completed += end - start + 1;
-          progress(`Converting PDF: ${sourceName} (${completed}/${totalPages} pages)...`);
-        }));
+        // Process batches with limited concurrency
+        let batchIdx = 0;
+        const runNext = (): Promise<void> => {
+          const idx = batchIdx++;
+          if (idx >= batches.length) return Promise.resolve();
+          const { start, end } = batches[idx];
+          return new Promise<void>((resolve, reject) => {
+            const w = new Worker(workerScript, {
+              workerData: { filePath, pngDir, startPage: start, endPage: end, pageOffset: 0, dpi: 200 },
+            });
+            let workerError = "";
+            w.on("message", (msg: { type: string; page?: number; message?: string }) => {
+              if (msg.type === "progress") {
+                completed++;
+                progress(`Converting PDF: ${sourceName} (${completed}/${totalPages} pages)...`);
+              } else if (msg.type === "error") {
+                workerError = msg.message ?? "unknown error";
+              }
+            });
+            w.on("error", reject);
+            w.on("exit", (code) => {
+              if (code !== 0) {
+                reject(new Error(workerError || `Worker exited with code ${code}`));
+              } else {
+                resolve();
+              }
+            });
+          }).then(() => runNext());
+        };
+
+        const lanes = Array.from({ length: Math.min(POOL_SIZE, batches.length) }, () => runNext());
+        await Promise.all(lanes);
       }
 
       return { ok: true };
@@ -314,17 +341,26 @@ export function activate(context: vscode.ExtensionContext): void {
   // The open VS Code folder IS the workspace (data dir)
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-  const ipcServer = new IpcServer();
+  const httpServer = new HttpServer();
   const pageViewer = new PageViewerProvider(workspaceFolder);
 
-  ipcServer.onMessage((msg) => {
-    switch (msg.type) {
-      case "show_page":
-        pageViewer.showPage(msg.sourceDir, msg.sourceName, msg.pageId, msg.bbox, msg.totalPages);
-        break;
-      case "page_list":
-        pageViewer.setPageRange(msg.firstPage, msg.lastPage);
-        break;
+  httpServer.onMessage((msg) => {
+    console.log(`[chronos-ext] Handling message: ${msg.type}`);
+    try {
+      switch (msg.type) {
+        case "show_page":
+          console.log(`[chronos-ext] showPage: dir=${msg.sourceDir}, page=${msg.pageId}`);
+          pageViewer.showPage(msg.sourceDir, msg.sourceName, msg.pageId, msg.bbox, msg.totalPages);
+          break;
+        case "page_list":
+          pageViewer.setPageRange(msg.firstPage, msg.lastPage);
+          break;
+        case "show_text":
+          pageViewer.showText(msg.filePath, msg.content, msg.highlight, msg.sourceName);
+          break;
+      }
+    } catch (err) {
+      console.error(`[chronos-ext] Error handling ${msg.type}:`, err);
     }
   });
 
@@ -343,12 +379,15 @@ export function activate(context: vscode.ExtensionContext): void {
       // the user runs /select-source in the pi TUI).
       pageViewer.ensurePanel();
 
+      // Wait for the HTTP server to be ready so the port is assigned
+      await httpServer.ready;
+
       // Launch pi in the workspace directory. Source selection happens
       // at runtime via the /select-source command inside the pi TUI.
       const terminal = vscode.window.createTerminal({
         name: "Chronos",
         cwd: workspaceFolder,
-        env: { CHRONOS_IPC_SOCKET: ipcServer.socketPath, ...workspaceEnv },
+        env: { CHRONOS_HTTP_PORT: String(httpServer.port), ...workspaceEnv },
       });
       terminal.sendText("pi");
       terminal.show(true);
@@ -451,30 +490,57 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
-    // Clickable [view p.N] links in the terminal → open page in chronos-viewer
+    // Clickable [view p.N], [view p.N selection], and [view p.N@sourcePath] links in the terminal
     vscode.window.registerTerminalLinkProvider({
       provideTerminalLinks(context): vscode.TerminalLink[] {
         const matches: vscode.TerminalLink[] = [];
-        const re = /\[view p\.(\d+)\]/g;
+        const re = /\[view p\.(\d+)(?: selection:([\d.]+),([\d.]+),([\d.]+),([\d.]+))?(?:@([^\]]+))?\]/g;
         let m: RegExpExecArray | null;
         while ((m = re.exec(context.line)) !== null) {
-          const link = new vscode.TerminalLink(m.index, m[0].length, m[1]);
+          let data = m[1];
+          if (m[2]) data += `|bbox:${m[2]},${m[3]},${m[4]},${m[5]}`;
+          if (m[6]) data += `@${m[6]}`;
+          const link = new vscode.TerminalLink(m.index, m[0].length, data);
           matches.push(link);
         }
         return matches;
       },
       handleTerminalLink(link: vscode.TerminalLink): void {
-        const pageId = parseInt(link.tooltip!, 10);
-        if (isNaN(pageId)) return;
-        const srcDir = pageViewer.sourceDir;
-        const srcName = pageViewer.sourceName;
-        if (srcDir && srcName) {
-          pageViewer.showPage(srcDir, srcName, pageId, null, pageViewer.totalPages);
+        let data = link.tooltip!;
+        let pageId: number;
+        let srcDir: string | undefined;
+        let srcName: string | undefined;
+        let bbox: { x: number; y: number; w: number; h: number } | null = null;
+
+        // Extract bbox if present
+        const bboxMatch = data.match(/\|bbox:([\d.]+),([\d.]+),([\d.]+),([\d.]+)/);
+        if (bboxMatch) {
+          bbox = {
+            x: parseFloat(bboxMatch[1]),
+            y: parseFloat(bboxMatch[2]),
+            w: parseFloat(bboxMatch[3]),
+            h: parseFloat(bboxMatch[4]),
+          };
+          data = data.replace(bboxMatch[0], "");
         }
+
+        const atIdx = data.indexOf("@");
+        if (atIdx !== -1) {
+          pageId = parseInt(data.slice(0, atIdx), 10);
+          srcDir = data.slice(atIdx + 1);
+          srcName = path.basename(srcDir);
+        } else {
+          pageId = parseInt(data, 10);
+          srcDir = pageViewer.sourceDir;
+          srcName = pageViewer.sourceName;
+        }
+
+        if (isNaN(pageId) || !srcDir || !srcName) return;
+        pageViewer.showPage(srcDir, srcName, pageId, bbox, pageViewer.totalPages);
       },
     }),
 
-    { dispose: () => ipcServer.dispose() }
+    { dispose: () => httpServer.dispose() }
   );
 }
 
