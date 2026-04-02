@@ -28,15 +28,11 @@ pi --help
 
 ### 2. Install the Chronos pi-package
 
-From the project root:
-
 ```bash
-cd chronos
-npm install
-pi install .
+pi install https://github.com/ai-historian/history-agent
 ```
 
-This registers the Chronos extension, tools, skills, and prompts with pi.
+This clones the repository, installs dependencies, and registers the Chronos extension, tools, skills, and prompts with pi.
 
 ### 3. Install the VS Code extension
 
