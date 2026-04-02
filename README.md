@@ -40,21 +40,14 @@ This registers the Chronos extension, tools, skills, and prompts with pi.
 
 ### 3. Install the VS Code extension
 
-```bash
-cd chronos-vscode
-npm install
-npm run build
-npm run package
-```
-
-Install the packaged extension:
+Download the latest `.vsix` from [GitHub Releases](https://github.com/ai-historian/history-agent/releases) and install it:
 
 ```bash
 # Linux / macOS
-code --install-extension chronos-0.3.0.vsix
+code --install-extension chronos-0.1.0.vsix
 
 # Windows (use code.cmd so the CLI runs instead of launching the GUI)
-code.cmd --install-extension chronos-0.3.0.vsix
+code.cmd --install-extension chronos-0.1.0.vsix
 ```
 
 Alternatively, open VS Code, go to the Extensions sidebar, click the `···` menu, choose **Install from VSIX…**, and select the file.
