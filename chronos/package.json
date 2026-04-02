@@ -5,7 +5,7 @@
   "type": "module",
   "keywords": ["pi-package"],
   "pi": {
-    "extensions": ["./extensions"],
+    "extensions": ["./dist/extensions"],
     "skills": ["./skills"],
     "prompts": ["./prompts"]
   },
