@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROMPTS_DIR = join(__dirname, "..", "prompts");
+const PROMPTS_DIR = join(__dirname, "..", "..", "prompts");
 
 export interface ToolText {
   description: string;

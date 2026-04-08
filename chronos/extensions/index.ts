@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
-import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,7 +21,25 @@ import { connectHttp, sendToExtension, disconnectHttp } from "../http/http-clien
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const PROMPTS_DIR = join(__dirname, "..", "prompts");
+const PROMPTS_DIR = join(__dirname, "..", "..", "prompts");
+
+function readWorkspaceSettings(cwd: string): Record<string, unknown> {
+  const settingsPath = join(cwd, ".chronos", "settings.json");
+  if (existsSync(settingsPath)) {
+    try {
+      return JSON.parse(readFileSync(settingsPath, "utf-8"));
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function writeWorkspaceSettings(cwd: string, settings: Record<string, unknown>) {
+  const settingsPath = join(cwd, ".chronos", "settings.json");
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+}
 
 export default function (pi: ExtensionAPI) {
   // Shared mutable source context — updated by /select-source and change_source tool
@@ -93,6 +111,19 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // ── /yolo command ──────────────────────────────────────────────────────
+
+  pi.registerCommand("yolo", {
+    description: "Toggle yolo mode — skip bash command confirmations",
+    handler: async (_args, ctx) => {
+      const settings = readWorkspaceSettings(ctx.cwd);
+      const current = settings.yolo === true;
+      settings.yolo = !current;
+      writeWorkspaceSettings(ctx.cwd, settings);
+      ctx.ui.notify(`Yolo mode ${settings.yolo ? "ON" : "OFF"}`, "info");
+    },
+  });
+
   // ── Lifecycle events ───────────────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
@@ -148,6 +179,8 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("tool_call", async (event, ctx) => {
     if (!isToolCallEventType("bash", event)) return;
+    const settings = readWorkspaceSettings(ctx.cwd);
+    if (settings.yolo === true) return;
     const approved = await ctx.ui.confirm(
       "Bash Command",
       `Allow: ${event.input.command}`,
