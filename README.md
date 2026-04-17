@@ -2,8 +2,6 @@
 
 An AI agent that collaborates with historians to extract structured datasets from primary sources, adapt to heterogeneous documents, and accumulate domain knowledge across sessions. Chronos combines a document analysis agent with a VS Code extension to analyze scanned page images, extract structured data, and build knowledge about archival sources.
 
-[![arXiv](https://img.shields.io/badge/arXiv-2604.03553-b31b1b.svg)](https://arxiv.org/abs/2604.03553) [![Project Page](https://img.shields.io/badge/Project_Page-ai--historian.com-blue.svg)](https://ai-historian.com/research/chronos/)
-
 ![Chronos demo](demo.png)
 
 ## Prerequisites
@@ -31,14 +29,14 @@ pi --help
 ### 2. Install the Chronos pi-package
 
 ```bash
-pi install https://github.com/ai-historian/history-agent
+pi install https://github.com/anonymized/history-agent
 ```
 
 This clones the repository, installs dependencies, and registers the Chronos extension, tools, skills, and prompts with pi.
 
 ### 3. Install the VS Code extension
 
-Download the latest `.vsix` from [GitHub Releases](https://github.com/ai-historian/history-agent/releases) and install it:
+Download the latest `.vsix` from [GitHub Releases](https://github.com/anonymized/history-agent/releases) and install it:
 
 ```bash
 # Linux / macOS
@@ -98,17 +96,6 @@ Run `pi --help` for the full list.
 ## Documentation
 
 See [DOCS.md](DOCS.md) for technical details on workspace structure, tools, skills, memory, and the VS Code extension.
-
-## Citation
-
-```bibtex
-@article{hufe2026towards,
-  title={Towards the AI Historian: Agentic Information Extraction from Primary Sources},
-  author={Hufe, Lorenz and Griesshaber, Niclas and Greif, Gavin and Eck, Sebastian Oliver and Torr, Philip},
-  journal={arXiv preprint arXiv:2604.03553},
-  year={2026}
-}
-```
 
 ## License
 
