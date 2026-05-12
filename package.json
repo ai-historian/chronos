@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "postinstall": "cd chronos && npm install && npm run build"
+    "postinstall": "cd chronos && npm install --include=dev && npm run build"
   },
   "pi": {
     "extensions": ["./chronos/dist/extensions"],
