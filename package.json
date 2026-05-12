@@ -1,6 +1,11 @@
 {
   "private": true,
   "scripts": {
-    "postinstall": "cd chronos && npm install"
+    "postinstall": "cd chronos && npm install && npm run build"
+  },
+  "pi": {
+    "extensions": ["./chronos/dist/extensions"],
+    "skills": ["./chronos/skills"],
+    "prompts": ["./chronos/prompts"]
   }
 }
