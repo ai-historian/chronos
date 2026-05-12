@@ -3,9 +3,66 @@ import * as path from "path";
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync } from "node:fs";
 import { join, relative, extname, basename } from "node:path";
 import { Worker } from "node:worker_threads";
+import { execSync } from "node:child_process";
 // mupdf is ESM-only — loaded via dynamic import() where needed
 import { HttpServer } from "./http-server";
 import { PageViewerProvider } from "./page-viewer";
+
+const PI_NPM_PACKAGE = "@mariozechner/pi-coding-agent";
+const CHRONOS_PI_PACKAGE = "https://github.com/ai-historian/history-agent";
+
+function hasPi(): boolean {
+  try {
+    execSync("pi --version", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolean> {
+  if (!hasPi()) {
+    const choice = await vscode.window.showWarningMessage(
+      "Chronos requires pi (an AI agent CLI) and the Chronos pi-package. Install them now in a terminal?",
+      { modal: true },
+      "Install",
+    );
+    if (choice !== "Install") return false;
+    const terminal = vscode.window.createTerminal({ name: "Chronos setup" });
+    terminal.sendText(
+      `npm install -g ${PI_NPM_PACKAGE} && pi install ${CHRONOS_PI_PACKAGE} && echo "" && echo "Chronos setup complete. Re-run the Chronos command from the Command Palette."`,
+    );
+    terminal.show(true);
+    vscode.window.showInformationMessage(
+      "Chronos setup started in the terminal. Re-run the Chronos command once it completes.",
+    );
+    return false;
+  }
+  const key = "chronos.piPackageInstalled";
+  if (!context.globalState.get(key)) {
+    const choice = await vscode.window.showInformationMessage(
+      "Install the Chronos pi-package? (one-time registration with pi)",
+      { modal: true },
+      "Install",
+      "Already installed",
+    );
+    if (choice === "Install") {
+      const terminal = vscode.window.createTerminal({ name: "Chronos setup" });
+      terminal.sendText(
+        `pi install ${CHRONOS_PI_PACKAGE} && echo "" && echo "Done. Re-run the Chronos command."`,
+      );
+      terminal.show(true);
+      await context.globalState.update(key, true);
+      return false;
+    }
+    if (choice === "Already installed") {
+      await context.globalState.update(key, true);
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
 
 function countPages(sourceDir: string): number {
   const pngDir = join(sourceDir, "png");
@@ -74,9 +131,16 @@ function writeIfMissing(filePath: string, content: string): void {
 
 async function initWorkspace(folder: string): Promise<boolean> {
   // Create directory structure
-  for (const dir of ["sources", "memory", "skills", "sessions", ".chronos"]) {
+  for (const dir of ["sources", "memory", "skills", "sessions", ".chronos", ".pi"]) {
     mkdirSync(join(folder, dir), { recursive: true });
   }
+
+  // Bridge the workspace-level skills/ dir into pi's resource discovery
+  // (pi auto-discovers from .pi/skills only; we point it at ../skills instead).
+  writeIfMissing(
+    join(folder, ".pi", "settings.json"),
+    JSON.stringify({ skills: ["../skills"] }, null, 2) + "\n",
+  );
 
   // Memory files
   writeIfMissing(join(folder, "memory", "MEMORY.MD"), "");
@@ -373,6 +437,8 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
+      if (!(await ensureBootstrap(context))) return;
+
       const workspaceEnv = readEnvFile(join(workspaceFolder, ".chronos", ".env"));
 
       // Open the page viewer panel immediately (shows empty state until
@@ -467,6 +533,8 @@ export function activate(context: vscode.ExtensionContext): void {
         );
         return;
       }
+
+      if (!(await ensureBootstrap(context))) return;
 
       const success = await initWorkspace(workspaceFolder);
       if (success) {
