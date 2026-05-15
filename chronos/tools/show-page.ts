@@ -50,7 +50,7 @@ export function createShowPageTool(ctx: SourceContext, description: string): Too
 
       const bbox = params.bbox ?? null;
       const viewLink = bbox
-        ? `[view p.${pageId}] [view p.${pageId} selection:${bbox.x},${bbox.y},${bbox.w},${bbox.h}]`
+        ? `[view p.${pageId}] [view p.${pageId}#sel=${bbox.x},${bbox.y},${bbox.w},${bbox.h}]`
         : `[view p.${pageId}]`;
 
       return {

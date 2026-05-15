@@ -558,11 +558,12 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
-    // Clickable [view p.N], [view p.N selection], and [view p.N@sourcePath] links in the terminal
+    // Clickable [view p.N], [view p.N#sel=x,y,w,h], and [view p.N@sourcePath] links in the terminal.
+    // No space inside the brackets so the TUI host can't word-wrap mid-link.
     vscode.window.registerTerminalLinkProvider({
       provideTerminalLinks(context): vscode.TerminalLink[] {
         const matches: vscode.TerminalLink[] = [];
-        const re = /\[view p\.(\d+)(?: selection:([\d.]+),([\d.]+),([\d.]+),([\d.]+))?(?:@([^\]]+))?\]/g;
+        const re = /\[view p\.(\d+)(?:#sel=([\d.]+),([\d.]+),([\d.]+),([\d.]+))?(?:@([^\]]+))?\]/g;
         let m: RegExpExecArray | null;
         while ((m = re.exec(context.line)) !== null) {
           let data = m[1];
