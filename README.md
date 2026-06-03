@@ -8,47 +8,39 @@ An AI agent that collaborates with historians to extract structured datasets fro
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) (v18+)
 - [VS Code](https://code.visualstudio.com/) (v1.110+)
+- [Node.js](https://nodejs.org/) (v18+) — required by the underlying `pi` agent the extension installs on first run
 - A [Gemini API key](https://aistudio.google.com/apikey) for the vision model
 
 ## Installation
 
-### 1. Install pi (the AI coding agent)
+Install the **Chronos — The AI Historian** extension from inside VS Code:
 
-Chronos runs as a package inside [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), an AI coding agent framework. Install it globally:
+1. Open the Extensions view (`Ctrl+Shift+X`, or `Cmd+Shift+X` on macOS).
+2. Search for **Chronos — The AI Historian**.
+3. Click **Install**.
+
+That's it. The first time you run a Chronos command, the extension checks for [`pi`](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) (the AI agent framework Chronos runs on) and the Chronos pi-package, and offers to install both in a terminal — no manual `npm install -g` or `pi install` step required.
+
+<details>
+<summary>Manual install (advanced / offline)</summary>
+
+If you'd rather install everything by hand:
 
 ```bash
+# 1. Install the pi agent globally
 npm install -g @mariozechner/pi-coding-agent
-```
 
-Verify it works:
-
-```bash
-pi --help
-```
-
-### 2. Install the Chronos pi-package
-
-```bash
+# 2. Register the Chronos pi-package
 pi install https://github.com/ai-historian/history-agent
+
+# 3. Install the VS Code extension from a downloaded .vsix
+code --install-extension chronos-ai-historian-0.1.7.vsix
 ```
 
-This clones the repository, installs dependencies, and registers the Chronos extension, tools, skills, and prompts with pi.
+The `.vsix` is published on [GitHub Releases](https://github.com/ai-historian/history-agent/releases).
 
-### 3. Install the VS Code extension
-
-Download the latest `.vsix` from [GitHub Releases](https://github.com/ai-historian/history-agent/releases) and install it:
-
-```bash
-# Linux / macOS
-code --install-extension chronos-0.1.1.vsix
-
-# Windows (use code.cmd so the CLI runs instead of launching the GUI)
-code.cmd --install-extension chronos-0.1.1.vsix
-```
-
-Alternatively, open VS Code, go to the Extensions sidebar, click the `···` menu, choose **Install from VSIX…**, and select the file.
+</details>
 
 ## Getting started
 
@@ -59,6 +51,8 @@ Open VS Code in an empty folder. Press `Ctrl+Shift+P` and run **Chronos: Init Wo
 ### 2. Import sources
 
 Press `Ctrl+Shift+P` and run **Chronos: Import Sources**. Select a folder containing your source material — PDFs, images (PNG, JPG, TIFF, BMP), or text files. Each file within the folder is treated as a source. PDFs are automatically converted to page images. You can import additional sources at any time by running the command again.
+
+> **Note:** Very large PDFs can sometimes crash the system during conversion. If this happens, please [open an issue](https://github.com/ai-historian/history-agent/issues) so we can look into it.
 
 ### 3. Start the agent
 
