@@ -16,7 +16,6 @@ async function main() {
   const { filePath, pngDir, startPage, endPage, pageOffset, dpi } = workerData as WorkerData;
   const scale = dpi / 72;
 
-  // Open by filename — mupdf uses memory-mapped I/O, much less RAM than loading a buffer
   const doc = mupdf.Document.openDocument(filePath, "application/pdf");
 
   for (let i = startPage; i < endPage; i++) {

@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync } from "node:fs";
+import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync } from "node:fs";
 import { join, relative, extname, basename } from "node:path";
 import { Worker } from "node:worker_threads";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync, spawn } from "node:child_process";
 // mupdf is ESM-only — loaded via dynamic import() where needed
 import { HttpServer } from "./http-server";
 import { PageViewerProvider } from "./page-viewer";
@@ -237,6 +237,81 @@ interface ImportResult {
   errors: string[];
 }
 
+// The bundled mupdf package is a WASM build: Document.openDocument(filePath) reads the
+// whole file into a Buffer via readFileSync, which Node caps at 2 GiB (ERR_FS_FILE_TOO_LARGE).
+const MAX_WASM_PDF_BYTES = 2 ** 31;
+
+function hasCommand(cmd: string): boolean {
+  try {
+    execSync(process.platform === "win32" ? `where ${cmd}` : `command -v ${cmd}`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Render with the native mutool CLI — same engine as the WASM mupdf package (identical
+// output), but with true memory-mapped I/O, so there is no file size limit.
+async function convertPdfNative(
+  filePath: string,
+  pngDir: string,
+  sourceName: string,
+  progress: (msg: string) => void,
+): Promise<void> {
+  const info = execFileSync("mutool", ["info", filePath], { encoding: "utf8" });
+  const match = info.match(/^Pages:\s+(\d+)/m);
+  if (!match) throw new Error("mutool info did not report a page count");
+  const totalPages = parseInt(match[1], 10);
+
+  const POOL_SIZE = 4;
+  const BATCH_SIZE = 50;
+  // mutool page ranges are 1-indexed inclusive; %04d in the output pattern expands to
+  // the actual page number, so concurrent batches never collide.
+  const batches: { start: number; end: number }[] = [];
+  for (let i = 1; i <= totalPages; i += BATCH_SIZE) {
+    batches.push({ start: i, end: Math.min(i + BATCH_SIZE - 1, totalPages) });
+  }
+
+  progress(`Converting PDF: ${sourceName} (${totalPages} pages, experimental native mutool fallback)...`);
+
+  let completed = 0;
+  let batchIdx = 0;
+  const runNext = (): Promise<void> => {
+    const idx = batchIdx++;
+    if (idx >= batches.length) return Promise.resolve();
+    const { start, end } = batches[idx];
+    return new Promise<void>((resolve, reject) => {
+      const proc = spawn("mutool", [
+        "draw", "-r", "200",
+        "-o", join(pngDir, "page_%04d.png"),
+        filePath, `${start}-${end}`,
+      ]);
+      let lastErrLine = "";
+      proc.stderr.on("data", (chunk: Buffer) => {
+        // mutool reports "page <file> <num>" per rendered page on stderr
+        for (const line of chunk.toString().split("\n")) {
+          if (line.startsWith("page ")) {
+            completed++;
+            progress(`Converting PDF: ${sourceName} (${completed}/${totalPages} pages)...`);
+          } else if (line.trim()) {
+            lastErrLine = line.trim();
+          }
+        }
+      });
+      proc.on("error", reject);
+      proc.on("exit", (code) => {
+        if (code !== 0) {
+          reject(new Error(lastErrLine || `mutool exited with code ${code}`));
+        } else {
+          resolve();
+        }
+      });
+    }).then(() => runNext());
+  };
+
+  await Promise.all(Array.from({ length: Math.min(POOL_SIZE, batches.length) }, () => runNext()));
+}
+
 async function importFile(
   filePath: string,
   sourcesDir: string,
@@ -255,8 +330,18 @@ async function importFile(
     mkdirSync(pngDir, { recursive: true });
     progress(`Converting PDF: ${sourceName}...`);
     try {
+      // Files >= 2 GiB can't be opened by the WASM mupdf build — use native mutool instead
+      if (statSync(filePath).size >= MAX_WASM_PDF_BYTES) {
+        if (!hasCommand("mutool")) {
+          throw new Error(
+            `file exceeds the 2 GiB limit of the bundled renderer. Files this large are only supported via an experimental workaround that renders with the native "mutool" CLI, which was not found — install it (e.g. sudo apt install mupdf-tools) and retry`,
+          );
+        }
+        await convertPdfNative(filePath, pngDir, sourceName, progress);
+        return { ok: true };
+      }
+
       const mupdf = await import("mupdf");
-      // Open by filename — mupdf uses memory-mapped I/O, much less RAM than loading a buffer
       const doc = mupdf.Document.openDocument(filePath, "application/pdf");
       const totalPages = doc.countPages();
 
@@ -326,6 +411,8 @@ async function importFile(
 
       return { ok: true };
     } catch (err) {
+      // Remove the partial source dir so a retry isn't rejected as "already exists"
+      rmSync(sourceDir, { recursive: true, force: true });
       return { ok: false, error: `PDF conversion failed for "${sourceName}": ${(err as Error).message}` };
     }
   }
