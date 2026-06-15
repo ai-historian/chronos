@@ -2,7 +2,7 @@
   "name": "chronos-ai-historian",
   "displayName": "Chronos — The AI Historian",
   "description": "AI-powered assistant that supports historians",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "publisher": "AI-Historian",
   "license": "MIT",
   "repository": {
@@ -12,7 +12,9 @@
   "engines": {
     "vscode": "^1.110.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [
     "onCommand:chronos.startSession"
   ],
@@ -42,7 +44,26 @@
     ],
     "configuration": {
       "title": "Chronos",
-      "properties": {}
+      "properties": {
+        "chronos.ui": {
+          "type": "string",
+          "enum": [
+            "terminal",
+            "chat"
+          ],
+          "default": "terminal",
+          "enumDescriptions": [
+            "Run the pi agent as a TUI in the integrated terminal (current default)",
+            "Experimental: run the agent behind an integrated chat panel"
+          ],
+          "description": "Which interface to use for Chronos agent sessions."
+        },
+        "chronos.piPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the pi binary. Leave empty to use \"pi\" from PATH."
+        }
+      }
     }
   },
   "scripts": {
@@ -51,12 +72,18 @@
     "package": "vsce package"
   },
   "dependencies": {
-    "mupdf": "^1.27.0"
+    "dompurify": "^3.4.9",
+    "lit": "^3.3.3",
+    "marked": "^18.0.5",
+    "mupdf": "^1.27.0",
+    "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.110.0",
+    "@vscode/test-electron": "^3.0.0",
     "@vscode/vsce": "^3.0.0",
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "typescript": "^6.0.3"
   }
 }

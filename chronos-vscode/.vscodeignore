@@ -1,4 +1,5 @@
 src/**
+webview/**
 node_modules/**
 !node_modules/mupdf/**
 .vscode/**
