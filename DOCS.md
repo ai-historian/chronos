@@ -29,28 +29,28 @@ The agent has these built-in tools for working with sources:
 | Tool | Description |
 |------|-------------|
 | `list_pages` | List available page IDs in the current source |
-| `ask_page` | Send a page image to the vision model with a prompt. Supports image cropping via bounding box and model selection |
-| `follow_up_question` | Continue the conversation about the last analyzed page (avoids re-sending the image) |
+| `task` | Talk to an expert model in a persistent conversation. Omitting `task_id` spawns a new expert and returns its id; passing it back asks follow-up questions in the same conversation. Optionally attaches a page image (with bounding-box cropping) and supports per-task model selection |
 | `show_page` | Display a page in the viewer without analysis. Supports bounding box cropping |
 | `show_text` | Display a text file in the viewer with optional passage highlighting |
-| `ask_pages_batch` | Batch-process multiple pages (requires explicit user confirmation) |
+| `task_batch` | Batch version of `task` — spawns one persistent expert per page (each follow-up-able via `task`); requires explicit user confirmation |
 | `change_source` | Switch to a different source at runtime |
 
 Standard file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) are also available for working with output files.
 
-### Vision models
+### Expert models
 
-The `ask_page` tool supports these Gemini models (default: `gemini-3-flash-preview`):
+The `task` and `task_batch` tools accept any model pi has configured auth for, as
+`provider/model-id` (default: `google/gemini-3-flash-preview`), e.g.:
 
-- `gemini-3-flash-preview`
-- `gemini-3.1-pro-preview`
-- `gemini-2.5-pro`
-- `gemini-2.5-flash`
-- `gemini-2.0-flash`
+- `google/gemini-3-flash-preview`
+- `google/gemini-3.1-pro-preview`
+- `anthropic/claude-opus-4-8`
+
+An unknown model name errors with the list of available models.
 
 ### Bounding box cropping
 
-`ask_page` and `show_page` accept an optional `bbox` parameter with normalized coordinates (0–1):
+`task` and `show_page` accept an optional `bbox` parameter with normalized coordinates (0–1):
 
 ```json
 { "x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5 }

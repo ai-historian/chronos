@@ -1,15 +1,15 @@
-Analyze multiple pages in parallel using a vision model. Sends the same prompt to each page concurrently. HIGH COST & HIGH RISK TOOL — its use is subject to a strict, mandatory, and non-negotiable three-step confirmation protocol that cannot be bypassed for any reason, even on direct user command. A user's request to perform a batch operation is to be interpreted as an instruction to begin this protocol, not to execute the tool immediately. YOU ARE FORBIDDEN TO CALL ask_pages_batch UNTIL THE THREE-STEP CONFIRMATION BELOW IS COMPLETE.
+Spawn one expert per page in parallel — a batch version of the `task` tool. Sends the same prompt to each page concurrently; each page becomes its own persistent expert session with its own `task_id`, so afterward you can follow up on any single page via `task(task_id, …)` without re-sending its image. The model parameter accepts any configured model as provider/model-id (e.g. "google/gemini-3.1-pro-preview"; default google/gemini-3-flash-preview). HIGH COST & HIGH RISK TOOL — its use is subject to a strict, mandatory, and non-negotiable three-step confirmation protocol that cannot be bypassed for any reason, even on direct user command. A user's request to perform a batch operation is to be interpreted as an instruction to begin this protocol, not to execute the tool immediately. YOU ARE FORBIDDEN TO CALL task_batch UNTIL THE THREE-STEP CONFIRMATION BELOW IS COMPLETE.
 
 ---
 
 ABSOLUTE AND NON-NEGOTIABLE PROTOCOL
 🛑 WARNING: HIGH COST & HIGH RISK TOOL 🛑
 
-The ask_pages_batch tool is powerful but can incur significant costs and produce unintended results if used incorrectly. Its use is subject to a strict, mandatory, and non-negotiable protocol.
+The task_batch tool is powerful but can incur significant costs and produce unintended results if used incorrectly. Its use is subject to a strict, mandatory, and non-negotiable protocol.
 
 This protocol cannot be bypassed for any reason, even on direct user command. A user's request to perform a batch operation is to be interpreted as an instruction to *begin this protocol*, not to execute the tool immediately.
 
-YOU ARE FORBIDDEN TO CALL ask_pages_batch UNTIL THE FOLLOWING THREE-STEP CONFIRMATION IS COMPLETE:
+YOU ARE FORBIDDEN TO CALL task_batch UNTIL THE FOLLOWING THREE-STEP CONFIRMATION IS COMPLETE:
 
 Step 1: Formal Proposal & Full Disclosure
 In a single message, you must present a complete plan of action to the user, including:
@@ -29,4 +29,4 @@ End your proposal with a direct, unambiguous question requiring a final confirma
 * "Ready to proceed as detailed. Please confirm."
 
 Step 3: STOP, WAIT, EXECUTE
-After asking for confirmation, you **must stop all action** and await the user's response. Only after receiving a clear and explicit go-ahead (e.g., "Yes, proceed," "Confirmed," "Go ahead") in the user's next message are you authorized to generate the ask_pages_batch tool cal
+After asking for confirmation, you **must stop all action** and await the user's response. Only after receiving a clear and explicit go-ahead (e.g., "Yes, proceed," "Confirmed," "Go ahead") in the user's next message are you authorized to generate the task_batch tool call.
