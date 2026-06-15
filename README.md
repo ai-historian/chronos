@@ -50,9 +50,11 @@ Open VS Code in an empty folder. Press `Ctrl+Shift+P` and run **Chronos: Init Wo
 
 ### 2. Import sources
 
-Press `Ctrl+Shift+P` and run **Chronos: Import Sources**. Select a folder containing your source material — PDFs, images (PNG, JPG, TIFF, BMP), or text files. Each file within the folder is treated as a source. PDFs are automatically converted to page images. You can import additional sources at any time by running the command again.
+Press `Ctrl+Shift+P` and run **Chronos: Import Sources**. Choose whether to select individual files or a whole folder of source material — PDFs, images (PNG, JPG, TIFF, BMP), or text files. Each file is treated as a source. PDFs are automatically converted to page images. You can import additional sources at any time by running the command again.
 
-> **Note:** Very large PDFs can sometimes crash the system during conversion. If this happens, please [open an issue](https://github.com/ai-historian/history-agent/issues) so we can look into it.
+Converting a large PDF can take a few minutes. Imports are crash-safe: a source only appears once it has finished converting, and if VS Code is closed or crashes mid-conversion, Chronos detects the interrupted import on the next launch (and when you next run **Import Sources**) and offers to **Resume** it (it picks up where it left off) or **Discard** the partial data.
+
+> **Note:** PDFs are streamed page-by-page during conversion, so there are no extra tools to install. Files over 2 GiB are automatically split into smaller parts first (this briefly uses a few GB of RAM). If a very large PDF still gives you trouble, please [open an issue](https://github.com/ai-historian/history-agent/issues) so we can look into it.
 
 ### 3. Start the agent
 

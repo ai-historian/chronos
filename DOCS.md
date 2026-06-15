@@ -91,7 +91,7 @@ Run a skill by typing `/skill:extract-entries` in the pi terminal.
 | **Chronos: Init Workspace** | Scaffold workspace structure and set API key |
 | **Chronos: Start Agent Session** | Launch the agent in a terminal with page viewer |
 | **Chronos: Show Page** | Open a specific page in the viewer |
-| **Chronos: Import Sources** | Batch-import files from a folder |
+| **Chronos: Import Sources** | Import selected file(s) or every supported file in a folder |
 | **Chronos: Window Setup** | Configure VS Code layout for Chronos |
 
 The extension provides clickable `[view p.N]` links in the terminal — click to open any page in the viewer.
