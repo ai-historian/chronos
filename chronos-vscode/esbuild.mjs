@@ -2,10 +2,11 @@ import * as esbuild from "esbuild";
 
 const watch = process.argv.includes("--watch");
 
-const ctx = await esbuild.context({
+const extensionCtx = await esbuild.context({
   entryPoints: {
     extension: "src/extension.ts",
     "pdf-worker": "src/pdf-worker.ts",
+    "pdf-split-worker": "src/pdf-split-worker.ts",
   },
   bundle: true,
   outdir: "out",
@@ -17,11 +18,26 @@ const ctx = await esbuild.context({
   minify: false,
 });
 
+const webviewCtx = await esbuild.context({
+  entryPoints: {
+    "webview/main": "webview/main.ts",
+  },
+  bundle: true,
+  outdir: "out",
+  format: "iife",
+  platform: "browser",
+  target: "es2022",
+  sourcemap: true,
+  minify: false,
+  loader: { ".woff2": "file" },
+  assetNames: "webview/[name]",
+});
+
 if (watch) {
-  await ctx.watch();
+  await Promise.all([extensionCtx.watch(), webviewCtx.watch()]);
   console.log("Watching for changes...");
 } else {
-  await ctx.rebuild();
-  await ctx.dispose();
+  await Promise.all([extensionCtx.rebuild(), webviewCtx.rebuild()]);
+  await Promise.all([extensionCtx.dispose(), webviewCtx.dispose()]);
   console.log("Build complete.");
 }
