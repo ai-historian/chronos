@@ -11,8 +11,11 @@ import type {
 } from "../../src/panel/webview-protocol";
 import type { ChronosChat } from "./chronos-chat";
 import type { ChronosPageViewer } from "./page-viewer";
+import type { ChronosDataViewer } from "./data-viewer";
 import "./chronos-chat";
 import "./page-viewer";
+import "./data-viewer";
+import brandIcon from "../assets/chronos-icon.png";
 
 interface Toast {
   id: number;
@@ -34,6 +37,7 @@ export class ChronosApp extends LitElement {
     yolo: { state: true },
     contextTokens: { state: true },
     sessionLoading: { state: true },
+    viewerTab: { state: true },
   };
 
   declare state: RpcSessionState | null;
@@ -48,6 +52,7 @@ export class ChronosApp extends LitElement {
   declare yolo: boolean;
   declare contextTokens: number;
   declare sessionLoading: { title?: string; name: string; sizeBytes?: number } | null;
+  declare viewerTab: "page" | "data";
 
   private postMessage: (msg: WebviewToExt) => void = () => {};
   private uiRequestQueue: RpcExtensionUIRequest[] = [];
@@ -67,6 +72,7 @@ export class ChronosApp extends LitElement {
     this.yolo = false;
     this.contextTokens = 0;
     this.sessionLoading = null;
+    this.viewerTab = "page";
   }
 
   // Context occupancy = what the next request will carry: fresh input +
@@ -100,6 +106,10 @@ export class ChronosApp extends LitElement {
 
   private get viewer(): ChronosPageViewer | null {
     return this.querySelector("chronos-page-viewer");
+  }
+
+  private get dataViewer(): ChronosDataViewer | null {
+    return this.querySelector("chronos-data-viewer");
   }
 
   handleMessage(msg: ExtToWebview): void {
@@ -189,9 +199,13 @@ export class ChronosApp extends LitElement {
         break;
       case "viewer/showPage":
         this.currentSource = msg.sourceName;
+        // An explicit page (agent or a data-row "view source" click) brings the
+        // Page tab forward so the cited region is visible.
+        this.viewerTab = "page";
         this.viewer?.showPage(msg.imageUri, msg.pageId, msg.sourceName, msg.firstPage, msg.lastPage, msg.bbox);
         break;
       case "viewer/showText":
+        this.viewerTab = "page";
         this.viewer?.showText(
           { filePath: msg.filePath, content: msg.content, highlight: msg.highlight },
           msg.sourceName,
@@ -200,7 +214,61 @@ export class ChronosApp extends LitElement {
       case "viewer/updateRange":
         this.viewer?.updateRange(msg.firstPage, msg.lastPage);
         break;
+      case "data/list":
+        this.dataViewer?.setFiles(msg.sourceName, msg.files);
+        break;
+      case "data/show":
+        this.dataViewer?.showFile(msg.filename, msg.content);
+        break;
+      case "data/sourcePreview":
+        this.dataViewer?.showSourcePreview(msg.imageUri, msg.pageId, msg.bbox, msg.sourceName);
+        break;
+      case "__test/invoke":
+        this.runTestAction(msg.action, msg.arg);
+        break;
+      case "__test/dump":
+        this.postMessage({ type: "__test/state", state: this.collectTestState() });
+        break;
     }
+  }
+
+  // ── test seam (integration tests drive the UI via the host) ───────────────
+
+  private runTestAction(action: string, arg?: string): void {
+    switch (action) {
+      case "sendPrompt":
+        this.chat?.testSubmit(arg ?? "");
+        break;
+      case "openDataTab":
+        this.viewerTab = "data";
+        this.postMessage({ type: "data/listRequest" });
+        break;
+      case "openPageTab":
+        this.viewerTab = "page";
+        break;
+      case "selectDataFile":
+        if (arg) this.dataViewer?.testSelect(arg);
+        break;
+      case "viewFirstRow":
+        this.dataViewer?.testViewFirstRow();
+        break;
+      case "showFullPage":
+        this.dataViewer?.testShowFullPage();
+        break;
+      case "clickReopen":
+        this.querySelector<HTMLButtonElement>(".view-reopen")?.click();
+        break;
+    }
+  }
+
+  private collectTestState(): unknown {
+    return {
+      currentSource: this.currentSource,
+      viewerTab: this.viewerTab,
+      chat: this.chat?.testSnapshot() ?? null,
+      viewer: this.viewer?.testSnapshot() ?? null,
+      data: this.dataViewer?.testSnapshot() ?? null,
+    };
   }
 
   private pushToast(level: Toast["level"], message: string): void {
@@ -243,11 +311,21 @@ export class ChronosApp extends LitElement {
 
   render(): TemplateResult {
     return html`
-      <div id="app-root" @keydown=${(e: KeyboardEvent) => this.viewer?.handleKeydown(e)}>
+      <div id="app-root" @keydown=${(e: KeyboardEvent) => { if (this.viewerTab === "page") this.viewer?.handleKeydown(e); }}>
         ${this.renderHeader()}
         <div id="app-main">
           <div id="pane-viewer" style="flex-basis:${this.splitPct}%">
-            <chronos-page-viewer></chronos-page-viewer>
+            <div class="pv-tabs">
+              <button class="pv-tab ${this.viewerTab === "page" ? "is-active" : ""}" @click=${() => (this.viewerTab = "page")}>Page</button>
+              <button class="pv-tab ${this.viewerTab === "data" ? "is-active" : ""}" @click=${() => {
+                this.viewerTab = "data";
+                this.postMessage({ type: "data/listRequest" });
+              }}>Data</button>
+            </div>
+            <div class="pv-tab-body">
+              <chronos-page-viewer ?hidden=${this.viewerTab !== "page"}></chronos-page-viewer>
+              <chronos-data-viewer ?hidden=${this.viewerTab !== "data"}></chronos-data-viewer>
+            </div>
           </div>
           <div id="splitter" @pointerdown=${this.onSplitterDown} title="Drag to resize"></div>
           <div id="pane-chat" style="flex-basis:${100 - this.splitPct}%">
@@ -267,11 +345,7 @@ export class ChronosApp extends LitElement {
     return html`
       <header id="app-header">
         <div class="brand">
-          <svg class="brand-mark" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <!-- aperture C: open ring + focus dot -->
-            <path d="M 19.6 16.4 A 8.8 8.8 0 1 1 19.6 7.6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
-            <circle cx="12" cy="12" r="2.6" fill="currentColor"/>
-          </svg>
+          <img class="brand-mark" src=${brandIcon} width="18" height="18" alt="" aria-hidden="true" />
           <span class="brand-name">Chronos</span>
         </div>
         <div class="header-controls">
@@ -480,6 +554,7 @@ export class ChronosApp extends LitElement {
   protected firstUpdated(): void {
     this.chat?.setPostMessage((msg) => this.postMessage(msg));
     this.viewer?.setPostMessage((msg) => this.postMessage(msg));
+    this.dataViewer?.setPostMessage((msg) => this.postMessage(msg));
     this.addEventListener("rewind-start", (e) => {
       const preview = (e as CustomEvent).detail?.preview ?? "";
       this.sessionLoading = {

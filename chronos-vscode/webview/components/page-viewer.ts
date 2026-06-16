@@ -177,6 +177,23 @@ export class ChronosPageViewer extends LitElement {
     this.applyZoomStyle();
   }
 
+  // ── test seam ───────────────────────────────────────────────────────────
+  testSnapshot(): {
+    pageId: number;
+    sourceName: string;
+    hasImage: boolean;
+    showingCrop: boolean;
+    textFile: string | null;
+  } {
+    return {
+      pageId: this.pageId,
+      sourceName: this.sourceName,
+      hasImage: !!this.imageUri,
+      showingCrop: this.showingCrop,
+      textFile: this.textView?.filePath ?? null,
+    };
+  }
+
   render(): TemplateResult {
     return html`
       <div class="pv-root">

@@ -13,6 +13,8 @@ import { createShowTextTool } from "../tools/show-text.js";
 import { createChangeSourceTool } from "../tools/change-source.js";
 import { createTaskBatchTool } from "../tools/task-batch.js";
 import { createExpertRegistry } from "../tools/expert-registry.js";
+import { restoreExpertSessions } from "../tools/expert-turn.js";
+import { loadExpertTasks } from "../utils/expert-store.js";
 import { loadToolText, loadPromptFile } from "../utils/tool-loader.js";
 import { listPageIds } from "../utils/page-files.js";
 import { discoverSources } from "../utils/source-discovery.js";
@@ -158,22 +160,38 @@ export default function (pi: ExtensionAPI) {
     });
   };
 
+  // Rebuild this session's persisted expert (task/task_batch) conversations so
+  // task_id follow-ups keep working across agent restarts and session resumes.
+  const restoreExperts = async (ctx: ExtensionContext) => {
+    try {
+      const persisted = loadExpertTasks(ctx.cwd, ctx.sessionManager.getSessionId());
+      if (persisted.length) await restoreExpertSessions(expertRegistry, ctx, persisted);
+    } catch (err) {
+      console.warn("[chronos] expert restore failed:", (err as Error).message);
+    }
+  };
+
   pi.on("session_start", async (_event, ctx) => {
     ensureWorkspace(ctx.cwd);
     // .chronos/.env holds workspace API keys (e.g. GEMINI_API_KEY) — the
-    // expert models read them from the environment.
+    // expert models read them from the environment (and we need them to
+    // re-resolve expert models when restoring sessions).
     dotenvConfig({ path: join(ctx.cwd, ".chronos", ".env") });
     connectHttp();
     restoreSource(ctx);
+    await restoreExperts(ctx);
   });
 
-  // Switching/resuming a session swaps the active source: clear, then restore
-  // whatever the target session had selected (no-op if none).
+  // Switching/resuming a session swaps the active source and experts: clear the
+  // in-memory state, then restore whatever the target session had (no-op if none).
   pi.on("session_switch", async (_event, ctx) => {
     sourceCtx.sourceDir = null;
     sourceCtx.sourceName = null;
     sourceCtx.sourceDataDir = null;
+    expertRegistry.sessions.clear();
+    expertRegistry.nextId = 1;
     restoreSource(ctx);
+    await restoreExperts(ctx);
   });
 
   pi.on("session_shutdown", async () => {
@@ -190,35 +208,10 @@ export default function (pi: ExtensionAPI) {
     return { systemPrompt: buildChronosSystemPrompt(sourceCtx, ctx.cwd) };
   });
 
-  // ── IPC streaming ─────────────────────────────────────────────────────
-
-  pi.on("message_update", async (event) => {
-    const e = event.assistantMessageEvent;
-    if (e.type === "text_delta") {
-      sendToExtension({ type: "text_delta", delta: e.delta });
-    }
-  });
-
-  pi.on("tool_execution_start", async (event) => {
-    const argsStr = JSON.stringify(event.args).slice(0, 200);
-    sendToExtension({ type: "tool_start", toolName: event.toolName, args: argsStr });
-  });
-
-  pi.on("tool_execution_end", async (event) => {
-    const result = event.result;
-    const resultText =
-      typeof result === "object" && result?.content
-        ? (result.content as any[])
-            .filter((c) => c.type === "text")
-            .map((c) => c.text)
-            .join("")
-        : String(result);
-    sendToExtension({ type: "tool_end", toolName: event.toolName, result: resultText.slice(0, 500) });
-  });
-
-  pi.on("agent_end", async () => {
-    sendToExtension({ type: "turn_end" });
-  });
+  // Note: chat/tool streaming (text deltas, tool start/end, turn end) reaches
+  // the VS Code panel over RPC AgentEvents. HTTP carries only viewer events
+  // (show_page / page_list / show_text from the viewer tools), so there are no
+  // streaming hooks here.
 
   // ── Bash confirmation hook ─────────────────────────────────────────────
 

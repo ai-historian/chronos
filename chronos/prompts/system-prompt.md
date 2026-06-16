@@ -24,8 +24,8 @@ Never write output files directly into the source directory (`{{sourceDir}}/`).
 
 ## VS Code integration
 
-If you are running inside VS Code via the Chronos extension, a page viewer panel is open
-alongside your terminal. As your goal is to support historians in their source workflow, 
+If you are running inside VS Code via the Chronos extension, a page viewer is open
+alongside the chat. As your goal is to support historians in their source workflow, 
 you use that viewer to e.g. demonstrate the provenance of your answers. AI systems can
 produce hallucinations - including yourself. Using  the page viewer the human co-historian
 can check your outputs and collaborate more interactively with you.
@@ -33,12 +33,32 @@ can check your outputs and collaborate more interactively with you.
 You have the following commands available to for the page viewer:
 - **`show_page`** — displays a specific page in the viewer (no analysis, instant).
 - **`list_pages`** — lists available pages AND updates the viewer's page-range indicator.
-- **`task`** — when a page is attached, the tool emits a `[view p.N]` link in the terminal.
+- **`task`** — when a page is attached, the tool emits a `[view p.N]` link in the chat.
   The user can click it to jump to that page in the viewer.
 - **`[view p.N]` links** — any time you write `[view p.N]` in your response (e.g.
-  `[view p.42]`), it becomes a clickable link in the terminal that opens page 42.
+  `[view p.42]`), it becomes a clickable citation in the chat that opens page 42.
 
 Use these affordances freely. The viewer updates in real time as you call tools.
+
+### Structured data output
+
+When you extract structured records into `{{sourceDataDir}}/`, prefer a **JSON array of
+row objects** (e.g. `entries.json`). The Chronos panel has a **Data** tab that renders any
+such file as a sortable table, so the historian can review your extractions directly.
+
+To keep each row traceable back to its source, include these reserved keys. They are hidden
+from the table and turned into a "view source" button that previews the cited region inline
+in the Data tab (with a "show full page" option):
+
+- `chronos_page` — the page the record was read from (same numbering as `show_page`).
+- `chronos_bbox` — *(optional)* region on that page as `[x, y, w, h]`, normalized 0–1.
+- `chronos_source` — *(optional)* workspace-relative source path (e.g. `sources/Frankfurt_1864`),
+  only when a row comes from a source other than the current one.
+
+Example row: `{ "surname": "Müller", "trade": "baker", "chronos_page": 42, "chronos_bbox": [0.1, 0.32, 0.8, 0.05] }`
+
+These keys are a recommendation, not a requirement — free-form text/CSV files still show in
+the Data tab (as text). Always write outputs under `{{sourceDataDir}}/`.
 
 ## Available tools
 

@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, basename, isAbsolute } from "node:path";
 import { PiRpcSession } from "../rpc/pi-rpc-session";
@@ -85,16 +85,22 @@ export class ChronosPanel {
   private lastError = "";
   private webviewReady = false;
 
-  // Viewer state (mirrors PageViewerProvider) so navigation and [view p.N]
-  // links without an explicit source resolve against the current source.
+  // Viewer state so navigation and [view p.N] links without an explicit
+  // source resolve against the current source.
   private currentSourceDir: string | undefined;
   private currentSourceName: string | undefined;
   private firstPage = 1;
   private lastPage = 1;
+  // Last source we pushed a data-file list for, so navigation within a source
+  // doesn't re-list on every page change.
+  private lastDataSource: string | undefined;
 
   // Blocking extension_ui_requests forwarded to the webview; answered with
   // cancelled on dispose so the agent never deadlocks.
   private pendingUiRequestIds = new Set<string>();
+
+  // Pending __test/dump requests awaiting the webview's state snapshot.
+  private testDumpResolvers: ((state: unknown) => void)[] = [];
 
   // Introspection for integration tests and debugging
   static getStatus(): { panelOpen: boolean; agentStatus: AgentStatus; agentPid?: number; lastError: string; webviewReady: boolean } | undefined {
@@ -133,6 +139,24 @@ export class ChronosPanel {
    *  adds a new source) so the header picker reflects it without a reload. */
   refreshSources(): void {
     this.postSources();
+  }
+
+  // ── test seam (integration tests) ─────────────────────────────────────────
+  /** Tell the webview to simulate a user action. */
+  testInvoke(action: string, arg?: string): void {
+    this.post({ type: "__test/invoke", action, arg });
+  }
+
+  /** Ask the webview for a state snapshot and resolve with it. */
+  testDump(): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("__test/dump timed out")), 5000);
+      this.testDumpResolvers.push((state) => {
+        clearTimeout(timer);
+        resolve(state);
+      });
+      this.post({ type: "__test/dump" });
+    });
   }
 
   private constructor(
@@ -206,6 +230,8 @@ export class ChronosPanel {
         this.isStreaming = false;
         // Message counts changed — keep the session list fresh
         this.postSessions();
+        // The turn may have written new extraction files — refresh the Data tab.
+        this.postDataFiles();
       }
       this.post({ type: "agentEvent", event });
     });
@@ -349,6 +375,22 @@ export class ChronosPanel {
       this.lastPage = totalPages;
     }
 
+    this.post({
+      type: "viewer/showPage",
+      imageUri: this.pageImageUri(sourceDir, pageId),
+      pageId,
+      sourceName: this.currentSourceName ?? sourceName,
+      firstPage: this.firstPage,
+      lastPage: this.lastPage,
+      bbox,
+    });
+
+    // Refresh the Data tab's file list when the active source changes.
+    if (this.currentSourceName !== this.lastDataSource) this.postDataFiles();
+  }
+
+  // Resolve a page's image file (png/jpg/jpeg) to a webview URI.
+  private pageImageUri(sourceDir: string, pageId: number): string {
     const pageBase = `page_${String(pageId).padStart(4, "0")}`;
     let pagePath = join(sourceDir, "png", pageBase + ".png");
     for (const ext of [".png", ".jpg", ".jpeg"]) {
@@ -358,16 +400,26 @@ export class ChronosPanel {
         break;
       }
     }
-    const imageUri = this.panel.webview.asWebviewUri(vscode.Uri.file(pagePath));
+    return this.panel.webview.asWebviewUri(vscode.Uri.file(pagePath)).toString();
+  }
 
+  // Resolve a cited page's image for the Data tab's inline crop preview, WITHOUT
+  // touching the page viewer or current source — the data and source viewers are
+  // independent; only "Show full page" (openViewLink) crosses over.
+  private previewSource(pageId: number, bbox: Bbox | null, sourcePath?: string): void {
+    let sourceDir = this.currentSourceDir;
+    let sourceName = this.currentSourceName;
+    if (sourcePath) {
+      sourceDir = isAbsolute(sourcePath) ? sourcePath : join(this.workspaceDir, sourcePath);
+      sourceName = basename(sourceDir);
+    }
+    if (!sourceDir) return;
     this.post({
-      type: "viewer/showPage",
-      imageUri: imageUri.toString(),
+      type: "data/sourcePreview",
+      imageUri: this.pageImageUri(sourceDir, pageId),
       pageId,
-      sourceName: this.currentSourceName ?? sourceName,
-      firstPage: this.firstPage,
-      lastPage: this.lastPage,
       bbox,
+      sourceName: sourceName ?? "",
     });
   }
 
@@ -381,6 +433,68 @@ export class ChronosPanel {
     if (!sourceDir || !sourceName) return;
     const totalPages = sourceDir === this.currentSourceDir ? undefined : countPages(sourceDir);
     this.showPage(sourceDir, sourceName, pageId, bbox, totalPages);
+  }
+
+  // Re-open a text file the agent showed earlier (show_text). The chat doesn't
+  // keep the content, so re-read it here and push it to the viewer.
+  private openTextView(filePath: string, highlight: string | null): void {
+    const resolved = isAbsolute(filePath)
+      ? filePath
+      : this.currentSourceDir
+        ? join(this.currentSourceDir, filePath)
+        : undefined;
+    if (!resolved) return;
+    try {
+      const content = readFileSync(resolved, "utf-8");
+      this.post({
+        type: "viewer/showText",
+        filePath: resolved,
+        content,
+        highlight,
+        sourceName: this.currentSourceName ?? basename(resolved),
+      });
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Could not open ${filePath}: ${(err as Error).message}` });
+    }
+  }
+
+  // ── dataset viewer ─────────────────────────────────────────────────────────
+  // The agent writes extraction outputs to data/<sourceName>/ (sourceName is the
+  // source dir basename, matching change_source / select-source). We surface
+  // those files in the Data tab; row provenance reuses openViewLink.
+
+  private dataDir(): string | undefined {
+    return this.currentSourceName ? join(this.workspaceDir, "data", this.currentSourceName) : undefined;
+  }
+
+  private listDataFiles(): string[] {
+    const dir = this.dataDir();
+    if (!dir) return [];
+    try {
+      return readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isFile() && !e.name.startsWith("."))
+        .map((e) => e.name)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      return [];
+    }
+  }
+
+  private postDataFiles(): void {
+    this.lastDataSource = this.currentSourceName;
+    this.post({ type: "data/list", sourceName: this.currentSourceName ?? "", files: this.listDataFiles() });
+  }
+
+  private postDataFile(filename: string): void {
+    const dir = this.dataDir();
+    // filenames come from listDataFiles (basenames); reject anything path-like.
+    if (!dir || filename.includes("/") || filename.includes("\\") || filename.includes("..")) return;
+    try {
+      const content = readFileSync(join(dir, filename), "utf-8");
+      this.post({ type: "data/show", sourceName: this.currentSourceName ?? "", filename, content });
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Could not read ${filename}: ${(err as Error).message}` });
+    }
   }
 
   // ── webview → extension ──────────────────────────────────────────────────
@@ -535,6 +649,21 @@ export class ChronosPanel {
         }
         case "openViewLink":
           this.openViewLink(msg.pageId, msg.bbox, msg.sourcePath);
+          break;
+        case "openTextView":
+          this.openTextView(msg.filePath, msg.highlight);
+          break;
+        case "data/listRequest":
+          this.postDataFiles();
+          break;
+        case "data/load":
+          this.postDataFile(msg.filename);
+          break;
+        case "data/previewSource":
+          this.previewSource(msg.pageId, msg.bbox, msg.sourcePath);
+          break;
+        case "__test/state":
+          this.testDumpResolvers.shift()?.(msg.state);
           break;
       }
     } catch (err) {

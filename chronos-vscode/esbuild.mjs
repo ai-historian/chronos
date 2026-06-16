@@ -29,7 +29,7 @@ const webviewCtx = await esbuild.context({
   target: "es2022",
   sourcemap: true,
   minify: false,
-  loader: { ".woff2": "file" },
+  loader: { ".woff2": "file", ".png": "dataurl" },
   assetNames: "webview/[name]",
 });
 

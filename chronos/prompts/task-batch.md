@@ -23,6 +23,8 @@ In a single message, you must present a complete plan of action to the user, inc
  * *(If writing to files)*: "The result for each page will be written to a file in the source data directory using the template: [filename_template]."
  * *(If returning to agent)*: "The results will be returned directly to me for immediate processing and consolidation."
 
+Output format for the Data tab: when the batch extracts structured records, prompt each expert to return a JSON array of row objects and to stamp every row with `chronos_page` (that page's page_id — different per task) and, where it helps, `chronos_bbox` as `[x,y,w,h]` normalized 0–1. The Chronos Data tab then renders each output file as a table whose rows link back to their source page/region. (See "Structured data output" in the system prompt.)
+
 Step 2: Request for Final Go/No-Go Confirmation
 End your proposal with a direct, unambiguous question requiring a final confirmation from the user. For example:
 * "Please review the plan above. Awaiting your final go-ahead to execute."
