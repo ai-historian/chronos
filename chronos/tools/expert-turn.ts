@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
-import { complete, type ImageContent, type TextContent, type UserMessage } from "@mariozechner/pi-ai";
+import { complete, type ImageContent, type Message, type TextContent, type UserMessage } from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { pageIdToPath } from "../utils/page-files.js";
 import type { ExpertRegistry, ExpertSession } from "./expert-registry.js";
@@ -8,11 +8,26 @@ import type { SourceContext } from "./source-context.js";
 import { requireSource } from "./source-context.js";
 import { resolveExpertModel } from "../utils/resolve-model.js";
 import { cropImageToBase64, type Bbox } from "../utils/crop-image.js";
+import { appendExpertTurn, type PersistedExpert } from "../utils/expert-store.js";
 
 export const DEFAULT_EXPERT_MODEL = "google/gemini-3-flash-preview";
 
 export function modelSpec(m: { provider: string; id: string }): string {
   return `${m.provider}/${m.id}`;
+}
+
+/**
+ * Build the image content block for an expert turn by reading (and optionally
+ * cropping) the page from disk. Shared by live turns and session restore, so a
+ * persisted expert rehydrates its images without storing base64 on disk.
+ */
+export async function pageImageContent(sourceDir: string, pageId: number, bbox?: Bbox): Promise<ImageContent> {
+  const imgPath = pageIdToPath(sourceDir, pageId);
+  if (!existsSync(imgPath)) {
+    throw new Error(`Page ${String(pageId).padStart(4, "0")} not found: ${imgPath}`);
+  }
+  const data = bbox ? await cropImageToBase64(imgPath, bbox) : readFileSync(imgPath).toString("base64");
+  return { type: "image", data, mimeType: "image/png" };
 }
 
 export interface ExpertTurnInput {
@@ -63,17 +78,16 @@ export async function runExpertTurn(
   // Build the user message; attach a page image only when page_id is given.
   const content: (TextContent | ImageContent)[] = [];
   let pageId: number | null = null;
+  let turnSourceDir: string | undefined;
   if (input.pageId !== undefined) {
     const sourceDir = requireSource(sourceCtx);
     pageId = Math.round(input.pageId);
-    const imgPath = pageIdToPath(sourceDir, pageId);
-    if (!existsSync(imgPath)) {
-      return { ok: false, taskId, error: `Page ${String(pageId).padStart(4, "0")} not found: ${imgPath}` };
+    try {
+      content.push(await pageImageContent(sourceDir, pageId, input.bbox));
+    } catch (e) {
+      return { ok: false, taskId, error: (e as Error).message };
     }
-    const imageData = input.bbox
-      ? await cropImageToBase64(imgPath, input.bbox)
-      : readFileSync(imgPath).toString("base64");
-    content.push({ type: "image", data: imageData, mimeType: "image/png" });
+    turnSourceDir = sourceDir;
   }
   content.push({ type: "text", text: input.prompt });
 
@@ -112,8 +126,55 @@ export async function runExpertTurn(
     .map((c) => c.text)
     .join("");
 
+  // Persist this turn so the expert survives an agent restart. Compact: prompt +
+  // provenance + the text-only response; the page image is rehydrated from disk
+  // on restore. Best-effort — appendExpertTurn never throws.
+  appendExpertTurn(extCtx.cwd, extCtx.sessionManager.getSessionId(), taskId!, modelSpec(resolved.model), {
+    prompt: input.prompt,
+    pageId: pageId ?? undefined,
+    bbox: input.bbox,
+    sourceDir: turnSourceDir,
+    response,
+  });
+
   const cost = response.usage?.cost;
   const costTotal = cost ? cost.input + cost.output + cost.cacheRead : undefined;
 
   return { ok: true, taskId: taskId!, model: modelSpec(resolved.model), text, cost: costTotal, pageId };
+}
+
+/**
+ * Rebuild in-memory expert sessions from their persisted turn-logs, re-cropping
+ * page images from disk. Skips a task whose model can no longer be resolved
+ * (e.g. missing API key); restores a turn text-only if its source page is gone.
+ * Mutates the registry in place (it's captured by reference by the tools).
+ */
+export async function restoreExpertSessions(
+  registry: ExpertRegistry,
+  extCtx: ExtensionContext,
+  persisted: PersistedExpert[],
+): Promise<void> {
+  let maxId = 0;
+  for (const rec of persisted) {
+    const messages: Message[] = [];
+    for (const turn of rec.turns) {
+      const content: (TextContent | ImageContent)[] = [];
+      if (turn.pageId !== undefined && turn.sourceDir) {
+        try {
+          content.push(await pageImageContent(turn.sourceDir, turn.pageId, turn.bbox));
+        } catch {
+          // page/source no longer on disk — restore this turn text-only
+        }
+      }
+      content.push({ type: "text", text: turn.prompt });
+      const userMessage: UserMessage = { role: "user", content, timestamp: turn.response.timestamp };
+      messages.push(userMessage, turn.response);
+    }
+    const resolved = await resolveExpertModel(rec.modelSpec, extCtx.modelRegistry, DEFAULT_EXPERT_MODEL, false);
+    if (!resolved.ok) continue;
+    registry.sessions.set(rec.taskId, { messages, model: resolved.model });
+    const n = parseInt(rec.taskId.replace(/^task-/, ""), 10);
+    if (!isNaN(n) && n > maxId) maxId = n;
+  }
+  if (maxId + 1 > registry.nextId) registry.nextId = maxId + 1;
 }

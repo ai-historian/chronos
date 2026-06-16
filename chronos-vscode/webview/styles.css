@@ -205,8 +205,12 @@ chronos-app,
 }
 
 .brand-mark {
-  color: var(--ch-brand);
   flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  object-fit: cover;
+  display: block;
 }
 
 .brand-name {
@@ -2281,4 +2285,268 @@ a.expert-tag.is-page:hover {
 .expert-chip-dot.is-error {
   background: var(--ch-error);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--ch-error) 22%, transparent);
+}
+
+/* ── viewer tabs (Page / Data) ───────────────────────────────────────────── */
+
+.pv-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid var(--ch-border);
+  background: var(--ch-surface-1);
+}
+
+.pv-tab {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--ch-radius-sm) var(--ch-radius-sm) 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ch-muted);
+  border-bottom: 2px solid transparent;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.pv-tab:hover {
+  color: var(--ch-fg);
+}
+
+.pv-tab.is-active {
+  color: var(--ch-fg);
+  border-bottom-color: var(--ch-brand);
+}
+
+.pv-tab-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.pv-tab-body > [hidden] {
+  display: none;
+}
+
+.pv-tab-body > chronos-page-viewer,
+.pv-tab-body > chronos-data-viewer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ── data viewer ─────────────────────────────────────────────────────────── */
+
+chronos-data-viewer,
+.dv-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+/* Inline crop preview: a docked, full-width, resizable panel at the bottom of
+   the data viewer (default ~30% of its height). */
+.dv-split {
+  flex: 0 0 5px;
+  cursor: row-resize;
+  background: transparent;
+  border-top: 1px solid var(--ch-border);
+  transition: background 120ms ease;
+}
+
+.dv-split:hover,
+.dv-split:active {
+  background: color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent);
+}
+
+.dv-preview {
+  flex: 0 0 30%; /* flex-basis overridden inline by previewPct */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--ch-surface-1);
+}
+
+.dv-preview-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dv-preview-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ch-brand-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.dv-preview-spacer {
+  flex: 1 1 auto;
+}
+
+.dv-preview-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 10px;
+  background: var(--ch-stage);
+  border-radius: var(--ch-radius-sm);
+}
+
+.dv-preview-stage img,
+.dv-preview-stage canvas {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+.dv-toolbar {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.dv-file-picker select {
+  height: 24px;
+  max-width: 320px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, var(--ch-border));
+  border-radius: var(--ch-radius-sm);
+  padding: 0 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.dv-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--ch-surface-1);
+}
+
+.dv-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ch-muted);
+}
+
+.dv-text {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ch-fg);
+}
+
+.dv-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dv-table th,
+.dv-table td {
+  text-align: left;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--ch-border-soft);
+  vertical-align: top;
+  max-width: 360px;
+  overflow-wrap: anywhere;
+}
+
+.dv-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--ch-surface-2);
+  color: var(--ch-muted);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.dv-table thead th:hover {
+  color: var(--ch-fg);
+}
+
+.dv-table thead th.is-sorted {
+  color: var(--ch-fg);
+}
+
+.dv-sort {
+  margin-left: 4px;
+  font-size: 9px;
+  opacity: 0.8;
+}
+
+.dv-table tbody tr:hover {
+  background: var(--ch-surface-2);
+}
+
+.dv-prov-head {
+  width: 1%;
+  text-align: center !important;
+  cursor: default !important;
+}
+
+.dv-prov {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.dv-view {
+  padding: 1px 7px;
+  border-radius: var(--ch-radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ch-brand-strong);
+  background: var(--ch-brand-soft);
+  border: 1px solid color-mix(in srgb, var(--ch-brand) 30%, transparent);
+  font-variant-numeric: tabular-nums;
+  transition: background 120ms ease;
+}
+
+.dv-view:hover {
+  background: color-mix(in srgb, var(--ch-brand) 24%, transparent);
+}
+
+/* ── "show in viewer again" control on chat entries that drove the viewer ── */
+
+.view-reopen {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--ch-radius-sm);
+  color: var(--ch-muted);
+  opacity: 0.7;
+  transition: color 120ms ease, background 120ms ease, opacity 120ms ease;
+}
+
+.view-reopen:hover {
+  color: var(--ch-brand);
+  background: var(--ch-brand-soft);
+  opacity: 1;
 }

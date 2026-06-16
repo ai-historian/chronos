@@ -6,7 +6,6 @@ import { Worker } from "node:worker_threads";
 import { execSync } from "node:child_process";
 // mupdf is ESM-only — loaded via dynamic import() where needed
 import { HttpServer } from "./http-server";
-import { PageViewerProvider } from "./page-viewer";
 import { ChronosPanel } from "./panel/chronos-panel";
 import { discoverSources, countPages } from "./panel/sources";
 import { withPdfDocument } from "./pdf-stream";
@@ -47,6 +46,9 @@ function hasChronosPiPackage(): boolean {
 }
 
 async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolean> {
+  // Integration tests drive a mock pi binary and have no real pi/package to
+  // install — skip the (modal, test-refused) bootstrap prompts.
+  if (process.env.CHRONOS_SKIP_BOOTSTRAP === "1") return true;
   if (!hasPi()) {
     const choice = await vscode.window.showWarningMessage(
       "Chronos requires pi (an AI agent CLI) and the Chronos pi-package. Install them now in a terminal?",
@@ -160,13 +162,14 @@ sessions/         Agent session logs (auto-generated)
    Or use **"Chronos: Import Sources"** to import PDFs and images automatically.
 
 3. **Start a session**: Open the Command Palette (\`Ctrl+Shift+P\`) and run
-   **"Chronos: Start Agent Session"**. This opens a \`pi\` terminal in the workspace.
+   **"Chronos: Start Agent Session"**. This opens the Chronos panel (page viewer
+   + chat) in the workspace.
 
-4. **Select a source**: Type \`/select-source\` in the terminal to pick a source.
-   The page viewer opens automatically.
+4. **Select a source**: Pick a source from the header dropdown, or type
+   \`/select-source\` in the chat. The page viewer opens automatically.
 
-5. **Browse pages**: Run **"Chronos: Show Page"** to open the page viewer
-   independently.
+5. **Browse pages**: Run **"Chronos: Show Page"** to jump the viewer to a
+   specific page.
 
 ## API Key
 
@@ -548,35 +551,21 @@ async function promptRecoverIncompleteImports(workspaceFolder: string): Promise<
   }
 }
 
-export function activate(context: vscode.ExtensionContext): { getChronosStatus: () => ReturnType<typeof ChronosPanel.getStatus> } {
+export function activate(context: vscode.ExtensionContext): {
+  getChronosStatus: () => ReturnType<typeof ChronosPanel.getStatus>;
+  chronosTest: { invoke: (action: string, arg?: string) => void; dump: () => Promise<unknown> | undefined };
+} {
   // The open VS Code folder IS the workspace (data dir)
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
   const httpServer = new HttpServer();
-  const pageViewer = new PageViewerProvider(workspaceFolder);
 
+  // The chat panel owns the page viewer. The agent pushes viewer events
+  // (show_page / page_list / show_text) here over HTTP; we bridge them to the
+  // webview. Dropped if no panel is open (e.g. during teardown).
   httpServer.onMessage((msg) => {
-    console.log(`[chronos-ext] Handling message: ${msg.type}`);
     try {
-      // The combined chat panel owns the viewer when it's open (chat mode);
-      // otherwise the standalone viewer panel renders (terminal/TUI mode).
-      const chronosPanel = ChronosPanel.active;
-      if (chronosPanel) {
-        chronosPanel.handleHttpMessage(msg);
-        return;
-      }
-      switch (msg.type) {
-        case "show_page":
-          console.log(`[chronos-ext] showPage: dir=${msg.sourceDir}, page=${msg.pageId}`);
-          pageViewer.showPage(msg.sourceDir, msg.sourceName, msg.pageId, msg.bbox, msg.totalPages);
-          break;
-        case "page_list":
-          pageViewer.setPageRange(msg.firstPage, msg.lastPage);
-          break;
-        case "show_text":
-          pageViewer.showText(msg.filePath, msg.content, msg.highlight, msg.sourceName);
-          break;
-      }
+      ChronosPanel.active?.handleHttpMessage(msg);
     } catch (err) {
       console.error(`[chronos-ext] Error handling ${msg.type}:`, err);
     }
@@ -606,27 +595,8 @@ export function activate(context: vscode.ExtensionContext): { getChronosStatus: 
         ...workspaceEnv,
       };
 
-      const uiMode = vscode.workspace.getConfiguration("chronos").get<string>("ui", "terminal");
-      if (uiMode === "chat") {
-        // Experimental: pi runs as an RPC subprocess behind a combined
-        // viewer + chat webview panel (no separate viewer panel needed)
-        await ChronosPanel.createOrShow(context.extensionUri, workspaceFolder, agentEnv);
-        return;
-      }
-
-      // Terminal mode: open the standalone page viewer panel immediately
-      // (shows empty state until the user runs /select-source in the TUI).
-      pageViewer.ensurePanel();
-
-      // Launch pi in the workspace directory. Source selection happens
-      // at runtime via the /select-source command inside the pi TUI.
-      const terminal = vscode.window.createTerminal({
-        name: "Chronos",
-        cwd: workspaceFolder,
-        env: agentEnv,
-      });
-      terminal.sendText("pi");
-      terminal.show(true);
+      // pi runs as an RPC subprocess behind the combined viewer + chat panel.
+      await ChronosPanel.createOrShow(context.extensionUri, workspaceFolder, agentEnv);
     }),
 
     vscode.commands.registerCommand("chronos.showPage", async () => {
@@ -655,11 +625,11 @@ export function activate(context: vscode.ExtensionContext): { getChronosStatus: 
       if (isNaN(pageId)) return;
 
       const target = ChronosPanel.active;
-      if (target) {
-        target.showPage(picked.source.path, path.basename(picked.source.path), pageId, null, countPages(picked.source.path));
-      } else {
-        pageViewer.showPage(picked.source.path, path.basename(picked.source.path), pageId, null, countPages(picked.source.path));
+      if (!target) {
+        vscode.window.showWarningMessage("Chronos: Start an agent session first (Chronos: Start Agent Session).");
+        return;
       }
+      target.showPage(picked.source.path, path.basename(picked.source.path), pageId, null, countPages(picked.source.path));
     }),
 
     vscode.commands.registerCommand("chronos.importSources", async () => {
@@ -782,57 +752,6 @@ export function activate(context: vscode.ExtensionContext): { getChronosStatus: 
       }
     }),
 
-    // Clickable [view p.N], [view p.N#sel=x,y,w,h], and [view p.N@sourcePath] links in the terminal.
-    // No space inside the brackets so the TUI host can't word-wrap mid-link.
-    vscode.window.registerTerminalLinkProvider({
-      provideTerminalLinks(context): vscode.TerminalLink[] {
-        const matches: vscode.TerminalLink[] = [];
-        const re = /\[view p\.(\d+)(?:#sel=([\d.]+),([\d.]+),([\d.]+),([\d.]+))?(?:@([^\]]+))?\]/g;
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(context.line)) !== null) {
-          let data = m[1];
-          if (m[2]) data += `|bbox:${m[2]},${m[3]},${m[4]},${m[5]}`;
-          if (m[6]) data += `@${m[6]}`;
-          const link = new vscode.TerminalLink(m.index, m[0].length, data);
-          matches.push(link);
-        }
-        return matches;
-      },
-      handleTerminalLink(link: vscode.TerminalLink): void {
-        let data = link.tooltip!;
-        let pageId: number;
-        let srcDir: string | undefined;
-        let srcName: string | undefined;
-        let bbox: { x: number; y: number; w: number; h: number } | null = null;
-
-        // Extract bbox if present
-        const bboxMatch = data.match(/\|bbox:([\d.]+),([\d.]+),([\d.]+),([\d.]+)/);
-        if (bboxMatch) {
-          bbox = {
-            x: parseFloat(bboxMatch[1]),
-            y: parseFloat(bboxMatch[2]),
-            w: parseFloat(bboxMatch[3]),
-            h: parseFloat(bboxMatch[4]),
-          };
-          data = data.replace(bboxMatch[0], "");
-        }
-
-        const atIdx = data.indexOf("@");
-        if (atIdx !== -1) {
-          pageId = parseInt(data.slice(0, atIdx), 10);
-          srcDir = data.slice(atIdx + 1);
-          srcName = path.basename(srcDir);
-        } else {
-          pageId = parseInt(data, 10);
-          srcDir = pageViewer.sourceDir;
-          srcName = pageViewer.sourceName;
-        }
-
-        if (isNaN(pageId) || !srcDir || !srcName) return;
-        pageViewer.showPage(srcDir, srcName, pageId, bbox, pageViewer.totalPages);
-      },
-    }),
-
     { dispose: () => httpServer.dispose() }
   );
 
@@ -841,7 +760,14 @@ export function activate(context: vscode.ExtensionContext): { getChronosStatus: 
     void promptRecoverIncompleteImports(workspaceFolder);
   }
 
-  return { getChronosStatus: () => ChronosPanel.getStatus() };
+  return {
+    getChronosStatus: () => ChronosPanel.getStatus(),
+    // Test-only seam used by the integration suite to drive the webview.
+    chronosTest: {
+      invoke: (action, arg) => ChronosPanel.active?.testInvoke(action, arg),
+      dump: () => ChronosPanel.active?.testDump(),
+    },
+  };
 }
 
 export function deactivate(): void {

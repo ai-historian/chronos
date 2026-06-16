@@ -74,6 +74,24 @@ function messageText(content: string | { type: string; [key: string]: any }[]): 
     .join("\n");
 }
 
+// A view a chat entry can re-open in the viewer (the agent showed it earlier).
+type ViewRef =
+  | { kind: "page"; pageId: number; bbox: { x: number; y: number; w: number; h: number } | null }
+  | { kind: "text"; filePath: string; highlight: string | null };
+
+// Tool calls that drove the page viewer carry enough in their args to re-open
+// the same view later — even from inside a collapsed activity group.
+function viewRefFromTool(item: ToolItem): ViewRef | null {
+  const a: any = item.args ?? {};
+  if (item.toolName === "show_page" && typeof a.page_id === "number") {
+    return { kind: "page", pageId: a.page_id, bbox: a.bbox ?? null };
+  }
+  if (item.toolName === "show_text" && typeof a.file_path === "string") {
+    return { kind: "text", filePath: a.file_path, highlight: a.highlight ?? null };
+  }
+  return null;
+}
+
 function resultText(result: any): string {
   if (result == null) return "";
   if (typeof result === "string") return result;
@@ -439,6 +457,33 @@ export class ChronosChat extends LitElement {
         break;
       }
     }
+  }
+
+  // ── test seam ───────────────────────────────────────────────────────────
+  // Mirrors a real composer submit (used by integration tests).
+  testSubmit(text: string): void {
+    if (!text) return;
+    this.items = [...this.items, { kind: "user", text }];
+    this.postMessage({ type: "prompt", text });
+  }
+
+  testSnapshot(): {
+    itemCount: number;
+    userCount: number;
+    toolNames: string[];
+    lastAssistant: string;
+    running: boolean;
+  } {
+    const assistant = [...this.items].reverse().find((i) => i.kind === "assistant") as
+      | { kind: "assistant"; message: AssistantMessage }
+      | undefined;
+    return {
+      itemCount: this.items.length,
+      userCount: this.items.filter((i) => i.kind === "user").length,
+      toolNames: this.items.filter((i) => i.kind === "tool").map((i) => (i as ToolItem).toolName),
+      lastAssistant: assistant ? messageText(assistant.message.content) : "",
+      running: this.running,
+    };
   }
 
   private sendPrompt(): void {
@@ -872,7 +917,7 @@ export class ChronosChat extends LitElement {
                   @click=${(e: MouseEvent) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    this.postMessage({ type: "openViewLink", pageId, bbox: null });
+                    this.postMessage({ type: "openViewLink", pageId, bbox: item.args?.bbox ?? null });
                   }}
                   >p. ${pageId}</a
                 >`
@@ -1060,15 +1105,40 @@ export class ChronosChat extends LitElement {
     `;
   }
 
+  // A small "open in viewer" control for chat entries that showed something
+  // (a page or text). Lives in summaries, so it must not toggle the <details>.
+  private renderViewButton(ref: ViewRef): TemplateResult {
+    return html`<button
+      class="view-reopen"
+      title="Show this in the viewer again"
+      @click=${(e: MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (ref.kind === "page") {
+          this.postMessage({ type: "openViewLink", pageId: ref.pageId, bbox: ref.bbox });
+        } else {
+          this.postMessage({ type: "openTextView", filePath: ref.filePath, highlight: ref.highlight });
+        }
+      }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12Z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    </button>`;
+  }
+
   private renderTool(item: ToolItem): TemplateResult {
     const { label, detail } = toolSummary(item);
     const output = resultText(item.result);
+    const ref = viewRefFromTool(item);
     return html`
       <details class="tool-card ${item.isError ? "is-error" : ""} ${item.running ? "is-running" : ""}">
         <summary>
           <span class="tool-marker">${item.running ? html`<span class="spinner"></span>` : item.isError ? "✗" : "·"}</span>
           <span class="tool-label">${label}</span>
           ${detail ? html`<span class="tool-detail">${detail.length > 80 ? detail.slice(0, 80) + "…" : detail}</span>` : nothing}
+          ${ref ? this.renderViewButton(ref) : nothing}
         </summary>
         <div class="tool-body">
           ${item.args != null ? html`<pre class="tool-pre">${JSON.stringify(item.args, null, 2)}</pre>` : nothing}

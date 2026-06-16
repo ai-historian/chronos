@@ -63,7 +63,15 @@ export type ExtToWebview =
       highlight: string | null;
       sourceName: string;
     }
-  | { type: "viewer/updateRange"; firstPage: number; lastPage: number };
+  | { type: "viewer/updateRange"; firstPage: number; lastPage: number }
+  // dataset viewer: files under the current source's data/ dir, and one file's content
+  | { type: "data/list"; sourceName: string; files: string[] }
+  | { type: "data/show"; sourceName: string; filename: string; content: string }
+  // resolved page image for the data viewer's inline crop preview
+  | { type: "data/sourcePreview"; imageUri: string; pageId: number; bbox: Bbox | null; sourceName: string }
+  // test-only seam (integration tests): simulate a user action / request a state snapshot
+  | { type: "__test/invoke"; action: string; arg?: string }
+  | { type: "__test/dump" };
 
 export type WebviewToExt =
   | { type: "ready" }
@@ -84,4 +92,13 @@ export type WebviewToExt =
   | { type: "editMessage"; originalText: string; occurrence: number; newText: string }
   | { type: "setYolo"; enabled: boolean }
   | { type: "viewer/navigate"; pageId: number }
-  | { type: "openViewLink"; pageId: number; bbox: Bbox | null; sourcePath?: string };
+  | { type: "openViewLink"; pageId: number; bbox: Bbox | null; sourcePath?: string }
+  // re-open a text file the agent showed earlier (the content isn't in the chat)
+  | { type: "openTextView"; filePath: string; highlight: string | null }
+  // dataset viewer requests
+  | { type: "data/listRequest" }
+  | { type: "data/load"; filename: string }
+  // ask the host to resolve a cited page's image for the inline crop preview
+  | { type: "data/previewSource"; pageId: number; bbox: Bbox | null; sourcePath?: string }
+  // test-only seam: the webview's state snapshot, in reply to __test/dump
+  | { type: "__test/state"; state: unknown };

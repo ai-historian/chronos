@@ -58,11 +58,11 @@ Converting a large PDF can take a few minutes. Imports are crash-safe: a source 
 
 ### 3. Start the agent
 
-Press `Ctrl+Shift+P` and run **Chronos: Start Agent Session**. The page viewer opens and a `pi` terminal starts.
+Press `Ctrl+Shift+P` and run **Chronos: Start Agent Session**. The Chronos panel opens — a page viewer on the left and a chat on the right.
 
-On first startup, type `/login` in the terminal to log into your AI provider account (e.g. Anthropic, Google). Without this, no models will be available.
+On first startup, type `/login` in the chat to log into your AI provider account (e.g. Anthropic, Google). Without this, no models will be available.
 
-Type `/select-source` to pick a source and begin working.
+Pick a source from the header dropdown (or type `/select-source`) and begin working.
 
 ## Configuration
 

@@ -45,19 +45,6 @@
     "configuration": {
       "title": "Chronos",
       "properties": {
-        "chronos.ui": {
-          "type": "string",
-          "enum": [
-            "terminal",
-            "chat"
-          ],
-          "default": "terminal",
-          "enumDescriptions": [
-            "Run the pi agent as a TUI in the integrated terminal (current default)",
-            "Experimental: run the agent behind an integrated chat panel"
-          ],
-          "description": "Which interface to use for Chronos agent sessions."
-        },
         "chronos.piPath": {
           "type": "string",
           "default": "",
@@ -69,7 +56,8 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "package": "vsce package"
+    "package": "vsce package",
+    "test": "node esbuild.mjs && node test/run-ui-test.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.9",
