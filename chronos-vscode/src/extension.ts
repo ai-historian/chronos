@@ -22,7 +22,11 @@ import {
 } from "./import-status";
 
 const PI_NPM_PACKAGE = "@mariozechner/pi-coding-agent";
-const CHRONOS_PI_PACKAGE = "https://github.com/ai-historian/history-agent";
+const CHRONOS_PI_PACKAGE = "https://github.com/ai-historian/chronos";
+// The pi-package repo was renamed history-agent → chronos. GitHub redirects the
+// old URL, but pi keys a package's identity on the literal host/path, so an
+// existing history-agent entry lingers as a duplicate unless we migrate it.
+const LEGACY_PI_PACKAGE = "https://github.com/ai-historian/history-agent";
 
 function hasPi(): boolean {
   try {
@@ -33,16 +37,37 @@ function hasPi(): boolean {
   }
 }
 
-// The chronos pi-package registers itself in pi's settings — detect it there
-// instead of asking the user a question pi can already answer.
-function hasChronosPiPackage(): boolean {
+// pi's user settings list the configured packages (each entry is either a
+// source string or a { source } object). Read them so we can detect what's
+// installed instead of asking the user a question pi can already answer.
+function piPackageSources(): string[] {
   try {
     const settingsPath = join(process.env.HOME ?? "", ".pi", "agent", "settings.json");
     const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    return Array.isArray(settings.packages) && settings.packages.includes(CHRONOS_PI_PACKAGE);
+    if (!Array.isArray(settings.packages)) return [];
+    return settings.packages
+      .map((p: unknown) => (typeof p === "string" ? p : (p as { source?: string } | null)?.source))
+      .filter((s: unknown): s is string => typeof s === "string");
   } catch {
-    return false;
+    return [];
   }
+}
+
+// Any settings entry that resolves to the Chronos pi-package: the canonical or
+// legacy GitHub URL (git:/https/ssh forms all end in the repo name), or a local
+// dev checkout of chronos/. Matching broadly avoids re-prompting — or double-
+// installing on top of a local dev path — when it's already registered.
+function isChronosEntry(source: string): boolean {
+  if (source.includes("ai-historian/history-agent")) return true;
+  return /(^|[\/\\])chronos$/.test(source.replace(/[\/\\]+$/, ""));
+}
+
+function hasChronosPiPackage(): boolean {
+  return piPackageSources().some(isChronosEntry);
+}
+
+function hasLegacyPiPackage(): boolean {
+  return piPackageSources().some((s) => s.includes("ai-historian/history-agent"));
 }
 
 async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolean> {
@@ -66,6 +91,26 @@ async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolea
     );
     return false;
   }
+  // One-time migration off the renamed history-agent URL. Runs independent of
+  // the install flag — already-set-up users would otherwise never switch. We
+  // remove the old entry and install the canonical one; the old URL redirects
+  // to the same repo, so this is just a settings rename. If it fails the legacy
+  // entry still works via the redirect, so this is safe to attempt optimistically.
+  const migratedKey = "chronos.migratedToChronosUrl";
+  if (!context.globalState.get(migratedKey) && hasLegacyPiPackage()) {
+    const terminal = vscode.window.createTerminal({ name: "Chronos setup" });
+    terminal.sendText(
+      `pi remove ${LEGACY_PI_PACKAGE} && pi install ${CHRONOS_PI_PACKAGE} && echo "" && echo "Chronos pi-package migrated. Re-run the Chronos command."`,
+    );
+    terminal.show(true);
+    await context.globalState.update(migratedKey, true);
+    await context.globalState.update("chronos.piPackageInstalled", true);
+    vscode.window.showInformationMessage(
+      "Updating the Chronos pi-package in the terminal. Re-run the Chronos command once it completes.",
+    );
+    return false;
+  }
+
   const key = "chronos.piPackageInstalled";
   if (!context.globalState.get(key) && hasChronosPiPackage()) {
     await context.globalState.update(key, true);
