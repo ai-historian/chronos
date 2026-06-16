@@ -32,13 +32,13 @@ If you'd rather install everything by hand:
 npm install -g @mariozechner/pi-coding-agent
 
 # 2. Register the Chronos pi-package
-pi install https://github.com/ai-historian/history-agent
+pi install https://github.com/ai-historian/chronos
 
 # 3. Install the VS Code extension from a downloaded .vsix
 code --install-extension chronos-ai-historian-0.1.7.vsix
 ```
 
-The `.vsix` is published on [GitHub Releases](https://github.com/ai-historian/history-agent/releases).
+The `.vsix` is published on [GitHub Releases](https://github.com/ai-historian/chronos/releases).
 
 </details>
 
@@ -54,7 +54,7 @@ Press `Ctrl+Shift+P` and run **Chronos: Import Sources**. Choose whether to sele
 
 Converting a large PDF can take a few minutes. Imports are crash-safe: a source only appears once it has finished converting, and if VS Code is closed or crashes mid-conversion, Chronos detects the interrupted import on the next launch (and when you next run **Import Sources**) and offers to **Resume** it (it picks up where it left off) or **Discard** the partial data.
 
-> **Note:** PDFs are streamed page-by-page during conversion, so there are no extra tools to install. Files over 2 GiB are automatically split into smaller parts first (this briefly uses a few GB of RAM). If a very large PDF still gives you trouble, please [open an issue](https://github.com/ai-historian/history-agent/issues) so we can look into it.
+> **Note:** PDFs are streamed page-by-page during conversion, so there are no extra tools to install. Files over 2 GiB are automatically split into smaller parts first (this briefly uses a few GB of RAM). If a very large PDF still gives you trouble, please [open an issue](https://github.com/ai-historian/chronos/issues) so we can look into it.
 
 ### 3. Start the agent
 
