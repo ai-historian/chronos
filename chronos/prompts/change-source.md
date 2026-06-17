@@ -1,1 +1,1 @@
-Switch to a different source directory at runtime. All source-specific tools (list_pages, ask_page, show_page, show_text) will operate on the new source after this call. source_path: absolute path to the source directory (must contain a png/ subdirectory).
+Switch to a different source directory at runtime. All source-specific tools (list_pages, task, show_page, show_text) will operate on the new source after this call. source_path: absolute path to the source directory (must contain a png/ subdirectory).

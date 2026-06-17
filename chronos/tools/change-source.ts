@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { ToolDefinition, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { listPageIds } from "../utils/page-files.js";
+import { saveSessionSource } from "../utils/session-source-store.js";
 import { sendToExtension } from "../http/http-client.js";
 import type { SourceContext } from "./source-context.js";
 
@@ -42,6 +43,10 @@ export function createChangeSourceTool(ctx: SourceContext, description: string):
       ctx.sourceName = basename(sourcePath);
       ctx.sourceDataDir = join(workspaceDir, "data", ctx.sourceName!);
       mkdirSync(ctx.sourceDataDir, { recursive: true });
+
+      // Persist for this session so resuming restores the source (sidecar only,
+      // never written to the conversation history).
+      saveSessionSource(workspaceDir, extCtx.sessionManager.getSessionId(), sourcePath);
 
       // Gather info about the source and notify the VS Code viewer
       const pages = listPageIds(sourcePath);

@@ -1,6 +1,7 @@
 import { workerData, parentPort } from "node:worker_threads";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, existsSync, renameSync } from "node:fs";
 import { join } from "node:path";
+import { withPdfDocument } from "./pdf-stream";
 
 interface WorkerData {
   filePath: string;
@@ -16,20 +17,34 @@ async function main() {
   const { filePath, pngDir, startPage, endPage, pageOffset, dpi } = workerData as WorkerData;
   const scale = dpi / 72;
 
-  // Open by filename — mupdf uses memory-mapped I/O, much less RAM than loading a buffer
-  const doc = mupdf.Document.openDocument(filePath, "application/pdf");
-
-  for (let i = startPage; i < endPage; i++) {
-    const page = doc.loadPage(i);
-    const pixmap = page.toPixmap(
-      mupdf.Matrix.scale(scale, scale),
-      mupdf.ColorSpace.DeviceRGB,
-      false,
-    );
-    const pageNum = String(pageOffset + i + 1).padStart(4, "0");
-    writeFileSync(join(pngDir, `page_${pageNum}.png`), pixmap.asPNG());
-    parentPort?.postMessage({ type: "progress", page: pageOffset + i + 1 });
-  }
+  // Stream the PDF (see withPdfDocument): mupdf reads only this batch's pages on demand
+  // instead of buffering the whole file, so memory stays flat no matter the file size.
+  withPdfDocument(mupdf, filePath, (doc) => {
+    for (let i = startPage; i < endPage; i++) {
+      const globalPage = pageOffset + i + 1;
+      const target = join(pngDir, `page_${String(globalPage).padStart(4, "0")}.png`);
+      // Resume support: a present PNG is fully written (we rename atomically below), so skip it.
+      if (existsSync(target)) {
+        parentPort?.postMessage({ type: "progress", page: globalPage });
+        continue;
+      }
+      const page = doc.loadPage(i);
+      const pixmap = page.toPixmap(
+        mupdf.Matrix.scale(scale, scale),
+        mupdf.ColorSpace.DeviceRGB,
+        false,
+      );
+      // Write to a temp file then rename: a crash mid-write can't leave a truncated PNG that
+      // a later resume would wrongly treat as done.
+      const tmp = target + ".tmp";
+      writeFileSync(tmp, pixmap.asPNG());
+      renameSync(tmp, target);
+      // Free the page's WASM memory before the next one so a large batch can't pile up.
+      pixmap.destroy();
+      page.destroy();
+      parentPort?.postMessage({ type: "progress", page: globalPage });
+    }
+  });
 
   parentPort?.postMessage({ type: "done", rendered: endPage - startPage });
 }
