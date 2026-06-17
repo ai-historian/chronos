@@ -70,10 +70,30 @@ function hasLegacyPiPackage(): boolean {
   return piPackageSources().some((s) => s.includes("ai-historian/history-agent"));
 }
 
+// A git/https/ssh URL entry, as opposed to a local filesystem path.
+function isGitUrlEntry(source: string): boolean {
+  return /^(https?:\/\/|git:|git@|ssh:\/\/)/.test(source);
+}
+
+// True when the package is registered as a local dev checkout (a path, not a
+// URL). Those installs are managed by the developer building from source, so the
+// bootstrap must not (re)install the pinned GitHub package on top of them.
+function hasLocalChronosCheckout(): boolean {
+  return piPackageSources().some((s) => isChronosEntry(s) && !isGitUrlEntry(s));
+}
+
 async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolean> {
   // Integration tests drive a mock pi binary and have no real pi/package to
   // install — skip the (modal, test-refused) bootstrap prompts.
   if (process.env.CHRONOS_SKIP_BOOTSTRAP === "1") return true;
+
+  // Pin the pi-package to the git tag matching this extension version, so the
+  // agent tracks the extension: installing or upgrading the extension (re)installs
+  // the matching pi-package. Requires a `v<version>` tag on the repo per release.
+  const wantedRef = `v${context.extension.packageJSON.version}`;
+  const wantedSource = `${CHRONOS_PI_PACKAGE}#${wantedRef}`;
+  const refKey = "chronos.piPackageRef";
+
   if (!hasPi()) {
     const choice = await vscode.window.showWarningMessage(
       "Chronos requires pi (an AI agent CLI) and the Chronos pi-package. Install them now in a terminal?",
@@ -83,7 +103,7 @@ async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolea
     if (choice !== "Install") return false;
     const terminal = vscode.window.createTerminal({ name: "Chronos setup" });
     terminal.sendText(
-      `npm install -g ${PI_NPM_PACKAGE} && pi install ${CHRONOS_PI_PACKAGE} && echo "" && echo "Chronos setup complete. Re-run the Chronos command from the Command Palette."`,
+      `npm install -g ${PI_NPM_PACKAGE} && pi install ${wantedSource} && echo "" && echo "Chronos setup complete. Re-run the Chronos command from the Command Palette."`,
     );
     terminal.show(true);
     vscode.window.showInformationMessage(
@@ -91,53 +111,47 @@ async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolea
     );
     return false;
   }
-  // One-time migration off the renamed history-agent URL. Runs independent of
-  // the install flag — already-set-up users would otherwise never switch. We
-  // remove the old entry and install the canonical one; the old URL redirects
-  // to the same repo, so this is just a settings rename. If it fails the legacy
-  // entry still works via the redirect, so this is safe to attempt optimistically.
-  const migratedKey = "chronos.migratedToChronosUrl";
-  if (!context.globalState.get(migratedKey) && hasLegacyPiPackage()) {
-    const terminal = vscode.window.createTerminal({ name: "Chronos setup" });
-    terminal.sendText(
-      `pi remove ${LEGACY_PI_PACKAGE} && pi install ${CHRONOS_PI_PACKAGE} && echo "" && echo "Chronos pi-package migrated. Re-run the Chronos command."`,
-    );
-    terminal.show(true);
-    await context.globalState.update(migratedKey, true);
-    await context.globalState.update("chronos.piPackageInstalled", true);
-    vscode.window.showInformationMessage(
-      "Updating the Chronos pi-package in the terminal. Re-run the Chronos command once it completes.",
-    );
-    return false;
-  }
 
-  const key = "chronos.piPackageInstalled";
-  if (!context.globalState.get(key) && hasChronosPiPackage()) {
-    await context.globalState.update(key, true);
-  }
-  if (!context.globalState.get(key)) {
+  // A local dev checkout (path entry) is managed by the developer building from
+  // source — never reinstall the pinned GitHub package on top of it.
+  if (hasLocalChronosCheckout()) return true;
+
+  // Up to date only when the package is actually registered AND at the ref this
+  // extension wants. Gating on actual presence (not just the stored ref) lets a
+  // failed prior install recover on the next launch instead of being skipped.
+  const installed = hasChronosPiPackage();
+  if (installed && context.globalState.get(refKey) === wantedRef) return true;
+
+  // (Re)install at the wanted ref. Covers a fresh install, an extension upgrade
+  // (stored ref differs), and migrating off the legacy history-agent URL (removed
+  // first, since pi keys identity on the URL and would otherwise keep both as
+  // distinct packages). Prompt only when nothing is installed yet; else refresh
+  // silently. The old URL redirects to the same repo, so the remove+install is a
+  // safe no-op clone if the migration is all that changed.
+  if (!installed) {
     const choice = await vscode.window.showInformationMessage(
       "Install the Chronos pi-package? (one-time registration with pi)",
       { modal: true },
       "Install",
       "Already installed",
     );
-    if (choice === "Install") {
-      const terminal = vscode.window.createTerminal({ name: "Chronos setup" });
-      terminal.sendText(
-        `pi install ${CHRONOS_PI_PACKAGE} && echo "" && echo "Done. Re-run the Chronos command."`,
-      );
-      terminal.show(true);
-      await context.globalState.update(key, true);
-      return false;
-    }
     if (choice === "Already installed") {
-      await context.globalState.update(key, true);
-    } else {
-      return false;
+      await context.globalState.update(refKey, wantedRef);
+      return true;
     }
+    if (choice !== "Install") return false;
   }
-  return true;
+  const migrate = hasLegacyPiPackage() ? `pi remove ${LEGACY_PI_PACKAGE} && ` : "";
+  const terminal = vscode.window.createTerminal({ name: "Chronos setup" });
+  terminal.sendText(
+    `${migrate}pi install ${wantedSource} && echo "" && echo "Chronos pi-package ${wantedRef} ready. Re-run the Chronos command."`,
+  );
+  terminal.show(true);
+  await context.globalState.update(refKey, wantedRef);
+  vscode.window.showInformationMessage(
+    `Setting up the Chronos pi-package (${wantedRef}) in the terminal. Re-run the Chronos command once it completes.`,
+  );
+  return false;
 }
 
 function readEnvFile(envPath: string): Record<string, string> {

@@ -35,7 +35,7 @@ npm install -g @mariozechner/pi-coding-agent
 pi install https://github.com/ai-historian/chronos
 
 # 3. Install the VS Code extension from a downloaded .vsix
-code --install-extension chronos-ai-historian-0.1.7.vsix
+code --install-extension chronos-ai-historian-0.2.0.vsix
 ```
 
 The `.vsix` is published on [GitHub Releases](https://github.com/ai-historian/chronos/releases).

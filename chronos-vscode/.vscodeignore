@@ -3,6 +3,11 @@ webview/**
 node_modules/**
 !node_modules/mupdf/**
 .vscode/**
+.vscode-test/**
 tsconfig.json
 esbuild.mjs
 **/*.map
+test/**
+scripts/**
+TESTING.md
+*.vsix
