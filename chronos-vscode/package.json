@@ -2,9 +2,10 @@
   "name": "chronos-ai-historian",
   "displayName": "Chronos — The AI Historian",
   "description": "AI-powered assistant that supports historians",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "publisher": "AI-Historian",
   "license": "MIT",
+  "icon": "icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/ai-historian/chronos"
@@ -12,7 +13,9 @@
   "engines": {
     "vscode": "^1.110.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [
     "onCommand:chronos.startSession"
   ],
@@ -42,21 +45,34 @@
     ],
     "configuration": {
       "title": "Chronos",
-      "properties": {}
+      "properties": {
+        "chronos.piPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the pi binary. Leave empty to use \"pi\" from PATH."
+        }
+      }
     }
   },
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "package": "vsce package"
+    "package": "vsce package",
+    "test": "node esbuild.mjs && node test/run-ui-test.mjs"
   },
   "dependencies": {
-    "mupdf": "^1.27.0"
+    "dompurify": "^3.4.9",
+    "lit": "^3.3.3",
+    "marked": "^18.0.5",
+    "mupdf": "^1.27.0",
+    "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.110.0",
+    "@vscode/test-electron": "^3.0.0",
     "@vscode/vsce": "^3.0.0",
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "typescript": "^6.0.3"
   }
 }

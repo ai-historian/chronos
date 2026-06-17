@@ -1,0 +1,766 @@
+import * as vscode from "vscode";
+import { execSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, dirname, basename, isAbsolute } from "node:path";
+import { PiRpcSession } from "../rpc/pi-rpc-session";
+import type { ModelInfo, RpcExtensionUIRequest, RpcSessionState, RpcSlashCommand } from "../rpc/rpc-types";
+import type { AgentToExtensionMessage } from "../protocol";
+import type { Bbox, ExtToWebview, WebviewToExt } from "./webview-protocol";
+import { discoverSources, countPages } from "./sources";
+import { listSessions, readSessionMessages } from "./sessions";
+
+function getNonce(): string {
+  let text = "";
+  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < 32; i++) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
+}
+
+export type AgentStatus = "starting" | "ready" | "failed" | "exited";
+
+// pi auto-registers every .md in a package's prompts/ dir as a slash command,
+// but the chronos package ships those files as agent-internal tool text (the
+// system prompt, expert prompts, per-tool descriptions) — not user commands.
+// They're the only "prompt"-source entries with package origin; the user's own
+// global/project prompts are top-level, and skills/extension commands are
+// genuinely user-facing. Hide package prompts; keep everything else.
+function isUserCommand(c: RpcSlashCommand): boolean {
+  return !(c.source === "prompt" && c.sourceInfo?.origin === "package");
+}
+
+// ── workspace settings (.chronos/settings.json — shared with the pi-package,
+//    which reads the `yolo` flag on every bash call) ────────────────────────
+
+interface ChronosSettings {
+  yolo?: boolean;
+  allowedCommands?: string[];
+  [key: string]: unknown;
+}
+
+function readChronosSettings(workspaceDir: string): ChronosSettings {
+  try {
+    return JSON.parse(readFileSync(join(workspaceDir, ".chronos", "settings.json"), "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeChronosSettings(workspaceDir: string, settings: ChronosSettings): void {
+  const dir = join(workspaceDir, ".chronos");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "settings.json"), JSON.stringify(settings, null, 2) + "\n", "utf-8");
+}
+
+// Multi-word launchers where the subcommand is the meaningful unit: suggest
+// "git status" rather than all of "git".
+const PREFIX_LAUNCHERS = new Set([
+  "git", "npm", "pnpm", "yarn", "pip", "pip3", "python", "python3",
+  "node", "cargo", "docker", "uv", "poetry", "make",
+]);
+
+function suggestPrefix(command: string): string {
+  const tokens = command.trim().split(/\s+/);
+  if (tokens.length >= 2 && PREFIX_LAUNCHERS.has(tokens[0])) {
+    return `${tokens[0]} ${tokens[1]}`;
+  }
+  return tokens[0] ?? command.trim();
+}
+
+function commandMatchesPrefix(command: string, prefix: string): boolean {
+  const cmd = command.trim();
+  return cmd === prefix || cmd.startsWith(prefix + " ");
+}
+
+export class ChronosPanel {
+  private static current: ChronosPanel | undefined;
+
+  private readonly panel: vscode.WebviewPanel;
+  private rpc: PiRpcSession | null = null;
+  private isStreaming = false;
+  private disposables: vscode.Disposable[] = [];
+  private agentStatus: AgentStatus = "starting";
+  private lastError = "";
+  private webviewReady = false;
+
+  // Viewer state so navigation and [view p.N] links without an explicit
+  // source resolve against the current source.
+  private currentSourceDir: string | undefined;
+  private currentSourceName: string | undefined;
+  private firstPage = 1;
+  private lastPage = 1;
+  // Last source we pushed a data-file list for, so navigation within a source
+  // doesn't re-list on every page change.
+  private lastDataSource: string | undefined;
+
+  // Blocking extension_ui_requests forwarded to the webview; answered with
+  // cancelled on dispose so the agent never deadlocks.
+  private pendingUiRequestIds = new Set<string>();
+
+  // Pending __test/dump requests awaiting the webview's state snapshot.
+  private testDumpResolvers: ((state: unknown) => void)[] = [];
+
+  // Introspection for integration tests and debugging
+  static getStatus(): { panelOpen: boolean; agentStatus: AgentStatus; agentPid?: number; lastError: string; webviewReady: boolean } | undefined {
+    const panel = ChronosPanel.current;
+    if (!panel) return undefined;
+    return {
+      panelOpen: true,
+      agentStatus: panel.agentStatus,
+      agentPid: panel.rpc?.pid,
+      lastError: panel.lastError,
+      webviewReady: panel.webviewReady,
+    };
+  }
+
+  static async createOrShow(
+    extensionUri: vscode.Uri,
+    workspaceDir: string,
+    agentEnv: Record<string, string>,
+  ): Promise<ChronosPanel> {
+    if (ChronosPanel.current) {
+      ChronosPanel.current.panel.reveal();
+      return ChronosPanel.current;
+    }
+    const panel = new ChronosPanel(extensionUri, workspaceDir, agentEnv);
+    ChronosPanel.current = panel;
+    await panel.startAgent();
+    return panel;
+  }
+
+  static get active(): ChronosPanel | undefined {
+    return ChronosPanel.current;
+  }
+
+  /** Re-scan sources/ and push the updated list to the webview. Called when an
+   *  external action changes the source tree (e.g. the Import Sources command
+   *  adds a new source) so the header picker reflects it without a reload. */
+  refreshSources(): void {
+    this.postSources();
+  }
+
+  // ── test seam (integration tests) ─────────────────────────────────────────
+  /** Tell the webview to simulate a user action. */
+  testInvoke(action: string, arg?: string): void {
+    this.post({ type: "__test/invoke", action, arg });
+  }
+
+  /** Ask the webview for a state snapshot and resolve with it. */
+  testDump(): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("__test/dump timed out")), 5000);
+      this.testDumpResolvers.push((state) => {
+        clearTimeout(timer);
+        resolve(state);
+      });
+      this.post({ type: "__test/dump" });
+    });
+  }
+
+  private constructor(
+    extensionUri: vscode.Uri,
+    private readonly workspaceDir: string,
+    private readonly agentEnv: Record<string, string>,
+  ) {
+    this.panel = vscode.window.createWebviewPanel(
+      "chronos.main",
+      "Chronos",
+      { viewColumn: vscode.ViewColumn.One, preserveFocus: false },
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [
+          vscode.Uri.joinPath(extensionUri, "out"),
+          vscode.Uri.file(workspaceDir),
+        ],
+      },
+    );
+    this.panel.webview.html = this.getHtml(extensionUri);
+    this.panel.webview.onDidReceiveMessage(
+      (msg: WebviewToExt) => this.handleWebviewMessage(msg),
+      undefined,
+      this.disposables,
+    );
+    this.panel.onDidDispose(() => this.dispose(), undefined, this.disposables);
+  }
+
+  private post(msg: ExtToWebview): void {
+    void this.panel.webview.postMessage(msg);
+  }
+
+  // ── agent lifecycle ───────────────────────────────────────────────────────
+
+  private resolvePiBin(): string {
+    const configured = vscode.workspace.getConfiguration("chronos").get<string>("piPath");
+    if (configured?.trim()) return configured.trim();
+    // GUI-launched VS Code doesn't source shell rc files, so PATH may miss the
+    // npm global bin dir. Probe PATH first, then common install locations.
+    try {
+      execSync(process.platform === "win32" ? "where pi" : "command -v pi", { stdio: "ignore" });
+      return "pi";
+    } catch {
+      const home = homedir();
+      const candidates = [
+        join(home, ".npm-global", "bin", "pi"),
+        join(home, ".local", "bin", "pi"),
+        join(home, ".npm", "bin", "pi"),
+        "/usr/local/bin/pi",
+        "/opt/homebrew/bin/pi",
+      ];
+      for (const candidate of candidates) {
+        if (existsSync(candidate)) return candidate;
+      }
+      return "pi"; // let spawn fail with a clear ENOENT
+    }
+  }
+
+  private async startAgent(): Promise<void> {
+    const rpc = new PiRpcSession({
+      piBin: this.resolvePiBin(),
+      workspaceDir: this.workspaceDir,
+      env: this.agentEnv,
+    });
+    this.rpc = rpc;
+
+    rpc.onEvent((event) => {
+      if (event.type === "agent_start") this.isStreaming = true;
+      if (event.type === "agent_end") {
+        this.isStreaming = false;
+        // Message counts changed — keep the session list fresh
+        this.postSessions();
+        // The turn may have written new extraction files — refresh the Data tab.
+        this.postDataFiles();
+      }
+      this.post({ type: "agentEvent", event });
+    });
+    rpc.onUiRequest((request) => void this.handleUiRequest(request));
+    rpc.onExit((code, stderrTail) => {
+      this.isStreaming = false;
+      this.agentStatus = "exited";
+      this.lastError = stderrTail.trim();
+      this.post({ type: "agentExited", code, stderr: stderrTail.trim() });
+    });
+
+    try {
+      this.agentStatus = "starting";
+      const state = await rpc.start();
+      this.agentStatus = "ready";
+      this.seedWebview(state);
+    } catch (err) {
+      this.agentStatus = "failed";
+      this.lastError = (err as Error).message;
+      console.error("[chronos-panel] pi startup failed:", (err as Error).message);
+      this.post({ type: "agentExited", code: null, stderr: (err as Error).message });
+      vscode.window.showErrorMessage(`Chronos: failed to start pi — ${(err as Error).message}`);
+    }
+  }
+
+  private seedWebview(state: RpcSessionState): void {
+    this.isStreaming = state.isStreaming;
+    this.post({ type: "state", state });
+    this.post({ type: "yolo", enabled: readChronosSettings(this.workspaceDir).yolo === true });
+    this.postSources();
+    this.postSessions();
+    void this.postHistory(state);
+    void this.rpc
+      ?.request<{ models: ModelInfo[] }>({ type: "get_available_models" })
+      .then((data) => this.post({ type: "models", models: data.models }))
+      .catch(() => {});
+    void this.rpc
+      ?.request<{ commands: RpcSlashCommand[] }>({ type: "get_commands" })
+      .then((data) => this.post({ type: "commands", commands: (data.commands ?? []).filter(isUserCommand) }))
+      .catch(() => {});
+  }
+
+  // Vision tool results embed base64 page images — multi-MB payloads the chat
+  // never renders. Strip them before crossing the postMessage bridge.
+  private static stripImages(messages: any[]): any[] {
+    return messages.map((msg) => {
+      if (!msg || !Array.isArray(msg.content)) return msg;
+      if (!msg.content.some((block: any) => block?.type === "image")) return msg;
+      return {
+        ...msg,
+        content: msg.content.map((block: any) =>
+          block?.type === "image" ? { type: "text", text: "[image]" } : block,
+        ),
+      };
+    });
+  }
+
+  // History from the session file when it's richer than the agent context
+  // (compaction trims the context on long sessions; the file keeps all turns).
+  private async postHistory(state: RpcSessionState): Promise<void> {
+    const filePath = state.sessionFile
+      ? isAbsolute(state.sessionFile)
+        ? state.sessionFile
+        : join(this.workspaceDir, state.sessionFile)
+      : undefined;
+    const fromFile = filePath ? readSessionMessages(filePath) : undefined;
+    try {
+      const data = await this.rpc?.request<{ messages: any[] }>({ type: "get_messages" });
+      const fromContext = data?.messages ?? [];
+      const messages =
+        fromFile && fromFile.length > fromContext.length ? fromFile : fromContext;
+      this.post({ type: "history", messages: ChronosPanel.stripImages(messages) });
+    } catch {
+      if (fromFile) this.post({ type: "history", messages: ChronosPanel.stripImages(fromFile) });
+    }
+  }
+
+  private postSources(): void {
+    const sourcesDir = join(this.workspaceDir, "sources");
+    const sources = existsSync(sourcesDir) ? discoverSources(sourcesDir) : [];
+    this.post({
+      type: "sources",
+      sources: sources.map((s) => ({ name: s.name, pageCount: countPages(s.path) })),
+    });
+  }
+
+  private postSessions(): void {
+    this.post({ type: "sessions", sessions: listSessions(this.workspaceDir) });
+  }
+
+  private async refreshState(): Promise<void> {
+    if (!this.rpc?.isRunning) return;
+    try {
+      const state = await this.rpc.request<RpcSessionState>({ type: "get_state" });
+      this.isStreaming = state.isStreaming;
+      this.post({ type: "state", state });
+    } catch {
+      // ignore
+    }
+  }
+
+  private async restartAgent(): Promise<void> {
+    await this.rpc?.stop();
+    this.rpc = null;
+    await this.startAgent();
+    this.post({ type: "agentRestarted" });
+  }
+
+  // ── viewer ────────────────────────────────────────────────────────────────
+
+  /** Messages from the chronos pi-package arriving over HTTP. */
+  handleHttpMessage(msg: AgentToExtensionMessage): void {
+    switch (msg.type) {
+      case "show_page":
+        this.showPage(msg.sourceDir, msg.sourceName, msg.pageId, msg.bbox, msg.totalPages);
+        break;
+      case "page_list":
+        this.firstPage = msg.firstPage;
+        this.lastPage = msg.lastPage;
+        this.post({ type: "viewer/updateRange", firstPage: msg.firstPage, lastPage: msg.lastPage });
+        break;
+      case "show_text":
+        this.currentSourceName = msg.sourceName;
+        this.post({
+          type: "viewer/showText",
+          filePath: msg.filePath,
+          content: msg.content,
+          highlight: msg.highlight,
+          sourceName: msg.sourceName,
+        });
+        break;
+      // text_delta/tool_start/tool_end/turn_end are RPC-event duplicates — dropped
+    }
+  }
+
+  showPage(sourceDir: string, sourceName: string, pageId: number, bbox: Bbox | null, totalPages?: number): void {
+    this.currentSourceDir = sourceDir;
+    this.currentSourceName = sourceName || this.currentSourceName;
+    if (totalPages && totalPages > 0) {
+      this.firstPage = 1;
+      this.lastPage = totalPages;
+    }
+
+    this.post({
+      type: "viewer/showPage",
+      imageUri: this.pageImageUri(sourceDir, pageId),
+      pageId,
+      sourceName: this.currentSourceName ?? sourceName,
+      firstPage: this.firstPage,
+      lastPage: this.lastPage,
+      bbox,
+    });
+
+    // Refresh the Data tab's file list when the active source changes.
+    if (this.currentSourceName !== this.lastDataSource) this.postDataFiles();
+  }
+
+  // Resolve a page's image file (png/jpg/jpeg) to a webview URI.
+  private pageImageUri(sourceDir: string, pageId: number): string {
+    const pageBase = `page_${String(pageId).padStart(4, "0")}`;
+    let pagePath = join(sourceDir, "png", pageBase + ".png");
+    for (const ext of [".png", ".jpg", ".jpeg"]) {
+      const candidate = join(sourceDir, "png", pageBase + ext);
+      if (existsSync(candidate)) {
+        pagePath = candidate;
+        break;
+      }
+    }
+    return this.panel.webview.asWebviewUri(vscode.Uri.file(pagePath)).toString();
+  }
+
+  // Resolve a cited page's image for the Data tab's inline crop preview, WITHOUT
+  // touching the page viewer or current source — the data and source viewers are
+  // independent; only "Show full page" (openViewLink) crosses over.
+  private previewSource(pageId: number, bbox: Bbox | null, sourcePath?: string): void {
+    let sourceDir = this.currentSourceDir;
+    let sourceName = this.currentSourceName;
+    if (sourcePath) {
+      sourceDir = isAbsolute(sourcePath) ? sourcePath : join(this.workspaceDir, sourcePath);
+      sourceName = basename(sourceDir);
+    }
+    if (!sourceDir) return;
+    this.post({
+      type: "data/sourcePreview",
+      imageUri: this.pageImageUri(sourceDir, pageId),
+      pageId,
+      bbox,
+      sourceName: sourceName ?? "",
+    });
+  }
+
+  private openViewLink(pageId: number, bbox: Bbox | null, sourcePath?: string): void {
+    let sourceDir = this.currentSourceDir;
+    let sourceName = this.currentSourceName;
+    if (sourcePath) {
+      sourceDir = isAbsolute(sourcePath) ? sourcePath : join(this.workspaceDir, sourcePath);
+      sourceName = basename(sourceDir);
+    }
+    if (!sourceDir || !sourceName) return;
+    const totalPages = sourceDir === this.currentSourceDir ? undefined : countPages(sourceDir);
+    this.showPage(sourceDir, sourceName, pageId, bbox, totalPages);
+  }
+
+  // Re-open a text file the agent showed earlier (show_text). The chat doesn't
+  // keep the content, so re-read it here and push it to the viewer.
+  private openTextView(filePath: string, highlight: string | null): void {
+    const resolved = isAbsolute(filePath)
+      ? filePath
+      : this.currentSourceDir
+        ? join(this.currentSourceDir, filePath)
+        : undefined;
+    if (!resolved) return;
+    try {
+      const content = readFileSync(resolved, "utf-8");
+      this.post({
+        type: "viewer/showText",
+        filePath: resolved,
+        content,
+        highlight,
+        sourceName: this.currentSourceName ?? basename(resolved),
+      });
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Could not open ${filePath}: ${(err as Error).message}` });
+    }
+  }
+
+  // ── dataset viewer ─────────────────────────────────────────────────────────
+  // The agent writes extraction outputs to data/<sourceName>/ (sourceName is the
+  // source dir basename, matching change_source / select-source). We surface
+  // those files in the Data tab; row provenance reuses openViewLink.
+
+  private dataDir(): string | undefined {
+    return this.currentSourceName ? join(this.workspaceDir, "data", this.currentSourceName) : undefined;
+  }
+
+  private listDataFiles(): string[] {
+    const dir = this.dataDir();
+    if (!dir) return [];
+    try {
+      return readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isFile() && !e.name.startsWith("."))
+        .map((e) => e.name)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      return [];
+    }
+  }
+
+  private postDataFiles(): void {
+    this.lastDataSource = this.currentSourceName;
+    this.post({ type: "data/list", sourceName: this.currentSourceName ?? "", files: this.listDataFiles() });
+  }
+
+  private postDataFile(filename: string): void {
+    const dir = this.dataDir();
+    // filenames come from listDataFiles (basenames); reject anything path-like.
+    if (!dir || filename.includes("/") || filename.includes("\\") || filename.includes("..")) return;
+    try {
+      const content = readFileSync(join(dir, filename), "utf-8");
+      this.post({ type: "data/show", sourceName: this.currentSourceName ?? "", filename, content });
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Could not read ${filename}: ${(err as Error).message}` });
+    }
+  }
+
+  // ── webview → extension ──────────────────────────────────────────────────
+
+  private async handleWebviewMessage(msg: WebviewToExt): Promise<void> {
+    try {
+      switch (msg.type) {
+        case "ready": {
+          // Webview (re)booted — re-seed if the agent is already up
+          this.webviewReady = true;
+          if (this.rpc?.isRunning) {
+            const state = await this.rpc.request<RpcSessionState>({ type: "get_state" });
+            this.seedWebview(state);
+          }
+          break;
+        }
+        case "prompt": {
+          if (this.isStreaming) {
+            await this.rpc?.request({ type: "steer", message: msg.text });
+          } else {
+            // No timeout: slash-command prompts (/select-source) only respond
+            // after their handler finishes, which may wait on a user dialog.
+            await this.rpc?.request({ type: "prompt", message: msg.text }, 0);
+          }
+          break;
+        }
+        case "abort":
+          await this.rpc?.request({ type: "abort" });
+          break;
+        case "restartAgent":
+          await this.restartAgent();
+          break;
+        case "newSession": {
+          const result = await this.rpc?.request<{ cancelled: boolean }>({ type: "new_session" }, 60_000);
+          if (result && !result.cancelled) {
+            this.currentSourceDir = undefined;
+            this.currentSourceName = undefined;
+            this.post({ type: "history", messages: [] });
+            await this.refreshState();
+            this.postSessions();
+          }
+          break;
+        }
+        case "resumeSession": {
+          try {
+            const result = await this.rpc?.request<{ cancelled: boolean }>(
+              { type: "switch_session", sessionPath: msg.sessionPath },
+              120_000,
+            );
+            if (result && !result.cancelled && this.rpc) {
+              const state = await this.rpc.request<RpcSessionState>({ type: "get_state" });
+              this.isStreaming = state.isStreaming;
+              this.post({ type: "state", state });
+              await this.postHistory(state);
+              this.post({ type: "resumeResult", ok: true });
+            } else {
+              this.post({ type: "resumeResult", ok: false });
+            }
+          } catch (err) {
+            this.post({ type: "resumeResult", ok: false });
+            throw err;
+          }
+          break;
+        }
+        case "setModel": {
+          await this.rpc?.request({ type: "set_model", provider: msg.provider, modelId: msg.modelId });
+          await this.refreshState();
+          break;
+        }
+        case "setThinkingLevel":
+          await this.rpc?.request({ type: "set_thinking_level", level: msg.level });
+          await this.refreshState();
+          break;
+        case "selectSource":
+          // Runs the chronos pi-package command; with an argument it selects
+          // directly, with an older package it opens the interactive picker
+          // (which arrives back here as an extension_ui_request).
+          await this.rpc?.request({ type: "prompt", message: `/select-source ${msg.name}` }, 0);
+          break;
+        case "refreshSessions":
+          this.postSessions();
+          break;
+        case "refreshSources":
+          this.postSources();
+          break;
+        case "uiResponse":
+          this.pendingUiRequestIds.delete(msg.response.id);
+          this.rpc?.sendUiResponse(msg.response);
+          break;
+        case "permissionResponse": {
+          this.pendingUiRequestIds.delete(msg.id);
+          if (msg.action === "always") {
+            const settings = readChronosSettings(this.workspaceDir);
+            const prefix = msg.prefix ?? "";
+            if (prefix) {
+              settings.allowedCommands = [...new Set([...(settings.allowedCommands ?? []), prefix])];
+              writeChronosSettings(this.workspaceDir, settings);
+            }
+          }
+          this.rpc?.sendUiResponse({
+            type: "extension_ui_response",
+            id: msg.id,
+            confirmed: msg.action !== "deny",
+          });
+          break;
+        }
+        case "editMessage": {
+          try {
+            const data = await this.rpc?.request<{ messages: { entryId: string; text: string }[] }>({
+              type: "get_fork_messages",
+            });
+            const wanted = msg.originalText.trim();
+            const matches = (data?.messages ?? []).filter((m) => m.text.trim() === wanted);
+            const target = matches[msg.occurrence] ?? matches[matches.length - 1];
+            if (!target) {
+              throw new Error("Could not locate this message in the session — it may predate a fork.");
+            }
+            const forkResult = await this.rpc?.request<{ cancelled: boolean }>(
+              { type: "fork", entryId: target.entryId },
+              60_000,
+            );
+            if (!forkResult || forkResult.cancelled) {
+              this.post({ type: "resumeResult", ok: false });
+              break;
+            }
+            const state = await this.rpc!.request<RpcSessionState>({ type: "get_state" });
+            this.isStreaming = state.isStreaming;
+            this.post({ type: "state", state });
+            await this.postHistory(state);
+            this.post({ type: "resumeResult", ok: true });
+            this.postSessions();
+            // Now run the edited message on the rewound branch
+            await this.rpc?.request({ type: "prompt", message: msg.newText }, 0);
+          } catch (err) {
+            this.post({ type: "resumeResult", ok: false });
+            throw err;
+          }
+          break;
+        }
+        case "setYolo": {
+          const settings = readChronosSettings(this.workspaceDir);
+          settings.yolo = msg.enabled;
+          writeChronosSettings(this.workspaceDir, settings);
+          this.post({ type: "yolo", enabled: msg.enabled });
+          break;
+        }
+        case "viewer/navigate": {
+          if (this.currentSourceDir && this.currentSourceName) {
+            this.showPage(this.currentSourceDir, this.currentSourceName, msg.pageId, null);
+          }
+          break;
+        }
+        case "openViewLink":
+          this.openViewLink(msg.pageId, msg.bbox, msg.sourcePath);
+          break;
+        case "openTextView":
+          this.openTextView(msg.filePath, msg.highlight);
+          break;
+        case "data/listRequest":
+          this.postDataFiles();
+          break;
+        case "data/load":
+          this.postDataFile(msg.filename);
+          break;
+        case "data/previewSource":
+          this.previewSource(msg.pageId, msg.bbox, msg.sourcePath);
+          break;
+        case "__test/state":
+          this.testDumpResolvers.shift()?.(msg.state);
+          break;
+      }
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: (err as Error).message });
+    }
+  }
+
+  // ── extension UI requests → webview dialogs ───────────────────────────────
+
+  private async handleUiRequest(request: RpcExtensionUIRequest): Promise<void> {
+    const rpc = this.rpc;
+    if (!rpc) return;
+    switch (request.method) {
+      case "confirm": {
+        // Bash confirmations from the chronos pi-package hook get the inline
+        // approval flow with a persistent allowlist instead of a dialog.
+        const bashCommand =
+          request.title === "Bash Command" && request.message.startsWith("Allow: ")
+            ? request.message.slice("Allow: ".length)
+            : undefined;
+        if (bashCommand !== undefined) {
+          const allowed = readChronosSettings(this.workspaceDir).allowedCommands ?? [];
+          if (allowed.some((prefix) => commandMatchesPrefix(bashCommand, prefix))) {
+            rpc.sendUiResponse({ type: "extension_ui_response", id: request.id, confirmed: true });
+            return;
+          }
+          this.pendingUiRequestIds.add(request.id);
+          this.post({
+            type: "permissionRequest",
+            id: request.id,
+            command: bashCommand,
+            suggestedPrefix: suggestPrefix(bashCommand),
+          });
+          this.panel.reveal(undefined, true);
+          return;
+        }
+        this.pendingUiRequestIds.add(request.id);
+        this.post({ type: "uiRequest", request });
+        this.panel.reveal(undefined, true);
+        break;
+      }
+      case "select":
+      case "input":
+      case "editor":
+        this.pendingUiRequestIds.add(request.id);
+        this.post({ type: "uiRequest", request });
+        this.panel.reveal(undefined, true);
+        break;
+      case "notify": {
+        this.post({
+          type: "notify",
+          level: request.notifyType ?? "info",
+          message: request.message,
+        });
+        break;
+      }
+      case "setTitle":
+        this.panel.title = request.title;
+        break;
+      default:
+        // setStatus/setWidget/set_editor_text: fire-and-forget, no reply expected
+        break;
+    }
+  }
+
+  // ── webview HTML ──────────────────────────────────────────────────────────
+
+  private getHtml(extensionUri: vscode.Uri): string {
+    const webview = this.panel.webview;
+    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "out", "webview", "main.js"));
+    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "out", "webview", "main.css"));
+    const nonce = getNonce();
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource};">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="${styleUri}">
+  <title>Chronos</title>
+</head>
+<body>
+  <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+  }
+
+  private dispose(): void {
+    ChronosPanel.current = undefined;
+    // Unblock any agent-side ctx.ui.* call still waiting on the webview
+    for (const id of this.pendingUiRequestIds) {
+      this.rpc?.sendUiResponse({ type: "extension_ui_response", id, cancelled: true });
+    }
+    this.pendingUiRequestIds.clear();
+    void this.rpc?.stop();
+    this.rpc = null;
+    for (const d of this.disposables) d.dispose();
+    this.disposables = [];
+  }
+}

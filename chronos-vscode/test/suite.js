@@ -1,0 +1,166 @@
+// Runs INSIDE the VS Code extension host (launched by run-ui-test.mjs).
+// Asserts the chat-UI startup path AND interaction flows end to end:
+// command → ChronosPanel webview → mock pi RPC subprocess → rendered UI.
+const vscode = require("vscode");
+const { mkdirSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function waitFor(label, predicate, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastErr;
+  while (Date.now() < deadline) {
+    try {
+      if (await predicate()) return;
+    } catch (err) {
+      lastErr = err;
+    }
+    await sleep(300);
+  }
+  throw new Error(`Timed out waiting for: ${label}${lastErr ? ` (last error: ${lastErr.message})` : ""}`);
+}
+
+function findChronosTab() {
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      if (tab.label.startsWith("Chronos")) return tab;
+    }
+  }
+  return undefined;
+}
+
+exports.run = async function run() {
+  const checks = [];
+  const check = (name, ok, detail = "") => {
+    checks.push({ name, ok });
+    console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
+  };
+
+  // Sanity: the dev extension is present
+  const ext = vscode.extensions.getExtension("AI-Historian.chronos-ai-historian");
+  check("extension present", !!ext, ext?.packageJSON.version);
+
+  const api = await ext.activate();
+
+  await vscode.commands.executeCommand("chronos.startSession");
+  check("chronos.startSession executed", true);
+
+  await waitFor("Chronos tab", () => !!findChronosTab());
+  check("Chronos webview tab opened", true);
+
+  // pi renames its process title to plain "pi", so don't pgrep — ask the
+  // extension for its own status (exposed for exactly this purpose).
+  await waitFor("agent ready", () => {
+    const status = api.getChronosStatus();
+    if (status?.agentStatus === "failed" || status?.agentStatus === "exited") {
+      throw new Error(`agent ${status.agentStatus}: ${status.lastError}`);
+    }
+    return status?.agentStatus === "ready";
+  });
+  const status = api.getChronosStatus();
+  check("pi RPC agent ready", true, `pid ${status?.agentPid}`);
+
+  // The webview posts "ready" once its bundle executed without crashing
+  await waitFor("webview ready handshake", () => api.getChronosStatus()?.webviewReady === true);
+  check("webview bundle booted (ready handshake)", true);
+
+  // ── interaction flows (driven through the test seam against the mock pi) ──
+  const dump = () => api.chronosTest.dump();
+
+  // 1. Prompt → assistant message renders in the chat
+  api.chronosTest.invoke("sendPrompt", "hello world");
+  await waitFor("assistant reply rendered", async () => {
+    const s = await dump();
+    return s?.chat?.userCount >= 1 && (s?.chat?.lastAssistant || "").includes("hello world");
+  });
+  check("prompt → assistant message renders", true);
+
+  // 2. Tool call → a tool card appears
+  api.chronosTest.invoke("sendPrompt", "tool: please list");
+  await waitFor("tool card rendered", async () => {
+    const s = await dump();
+    return (s?.chat?.toolNames || []).includes("list_pages");
+  });
+  check("tool call renders a tool card", true);
+
+  // 3. Source selection (mock pushes show_page over HTTP) → viewer + data dir
+  api.chronosTest.invoke("sendPrompt", "select: TestSource");
+  await waitFor("source active in viewer", async () => (await dump())?.currentSource === "TestSource");
+  check("show_page over HTTP drives the viewer", true);
+
+  // 4. Dataset viewer: write a provenance-bearing file, open the Data tab,
+  //    confirm it parses as a table with provenance.
+  const ws = vscode.workspace.workspaceFolders[0].uri.fsPath;
+  const dataDir = join(ws, "data", "TestSource");
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(
+    join(dataDir, "entries.json"),
+    JSON.stringify(
+      [
+        { surname: "Müller", trade: "baker", chronos_page: 1, chronos_bbox: [0.1, 0.2, 0.5, 0.1] },
+        { surname: "Schmidt", trade: "smith", chronos_page: 1, chronos_bbox: [0.1, 0.35, 0.5, 0.1] },
+      ],
+      null,
+      2,
+    ),
+  );
+  api.chronosTest.invoke("openDataTab");
+  await waitFor("data file parsed as table", async () => {
+    const s = await dump();
+    return (
+      s?.viewerTab === "data" &&
+      (s?.data?.files || []).includes("entries.json") &&
+      s?.data?.selected === "entries.json" &&
+      s?.data?.rowCount === 2 &&
+      s?.data?.hasProvenance === true &&
+      (s?.data?.columns || []).includes("surname") &&
+      !(s?.data?.columns || []).includes("chronos_page")
+    );
+  });
+  check("dataset viewer renders table + hides provenance columns", true);
+
+  // 5. Row provenance → inline crop preview in the data viewer (stays on Data —
+  //    the source and data viewers are independent).
+  api.chronosTest.invoke("viewFirstRow");
+  await waitFor("inline source preview shown", async () => {
+    const s = await dump();
+    return s?.viewerTab === "data" && s?.data?.preview?.pageId === 1 && s?.data?.preview?.hasImage === true;
+  });
+  check("row 'view source' previews the page inline (no tab switch)", true);
+
+  // 5b. "Show full page" is the only thing that hands off to the source viewer.
+  api.chronosTest.invoke("showFullPage");
+  await waitFor("show full page opens source viewer", async () => {
+    const s = await dump();
+    return s?.viewerTab === "page" && s?.viewer?.pageId === 1;
+  });
+  check("'Show full page' switches to the source viewer", true);
+
+  // 6. Re-open icon on a viewer tool entry (in the reasoning area): a show_page
+  //    tool call gets a "view" button; switch away, click it, viewer comes back.
+  api.chronosTest.invoke("sendPrompt", "showpage: 1");
+  await waitFor("show_page tool entry present", async () => {
+    const s = await dump();
+    return (s?.chat?.toolNames || []).includes("show_page");
+  });
+  api.chronosTest.invoke("openDataTab");
+  await waitFor("switched to data tab", async () => (await dump())?.viewerTab === "data");
+  api.chronosTest.invoke("clickReopen");
+  await waitFor("re-open icon restores the page view", async () => {
+    const s = await dump();
+    return s?.viewerTab === "page" && s?.viewer?.pageId === 1;
+  });
+  check("re-open icon on a tool entry restores the viewer", true);
+
+  // Make sure the subprocess stayed alive throughout
+  const after = api.getChronosStatus();
+  check("pi subprocess still alive", after?.agentStatus === "ready", after?.lastError);
+
+  const failed = checks.filter((c) => !c.ok);
+  if (failed.length > 0) {
+    throw new Error(`${failed.length} checks failed: ${failed.map((c) => c.name).join(", ")}`);
+  }
+};

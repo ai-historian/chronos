@@ -4,6 +4,7 @@ dist/
 *.js.map
 chronos-vscode/node_modules/
 chronos-vscode/out/
+chronos-vscode/.vscode-test/
 *.tgz
 *.vsix
 *.html

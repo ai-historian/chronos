@@ -20,27 +20,6 @@ export interface PageListMessage {
   totalPages: number;
 }
 
-export interface TextDeltaMessage {
-  type: "text_delta";
-  delta: string;
-}
-
-export interface ToolStartMessage {
-  type: "tool_start";
-  toolName: string;
-  args: string;
-}
-
-export interface ToolEndMessage {
-  type: "tool_end";
-  toolName: string;
-  result: string;
-}
-
-export interface TurnEndMessage {
-  type: "turn_end";
-}
-
 export interface ShowTextMessage {
   type: "show_text";
   filePath: string;
@@ -58,10 +37,6 @@ export type AgentToExtensionMessage =
   | ShowPageMessage
   | PageListMessage
   | ShowTextMessage
-  | TextDeltaMessage
-  | ToolStartMessage
-  | ToolEndMessage
-  | TurnEndMessage
   | ErrorMessage;
 
 // Extension → Agent messages
