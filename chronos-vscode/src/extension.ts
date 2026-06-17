@@ -54,11 +54,12 @@ function piPackageSources(): string[] {
 }
 
 // Any settings entry that resolves to the Chronos pi-package: the canonical or
-// legacy GitHub URL (git:/https/ssh forms all end in the repo name), or a local
-// dev checkout of chronos/. Matching broadly avoids re-prompting — or double-
-// installing on top of a local dev path — when it's already registered.
+// legacy GitHub URL (any scheme, with or without an `@<ref>` pin suffix), or a
+// local dev checkout of chronos/. Matching broadly avoids re-prompting — or
+// double-installing on top of a local dev path — when it's already registered.
 function isChronosEntry(source: string): boolean {
-  if (source.includes("ai-historian/history-agent")) return true;
+  if (source.includes("ai-historian/chronos") || source.includes("ai-historian/history-agent")) return true;
+  // local dev checkout: a filesystem path ending in /chronos
   return /(^|[\/\\])chronos$/.test(source.replace(/[\/\\]+$/, ""));
 }
 
@@ -91,7 +92,10 @@ async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolea
   // agent tracks the extension: installing or upgrading the extension (re)installs
   // the matching pi-package. Requires a `v<version>` tag on the repo per release.
   const wantedRef = `v${context.extension.packageJSON.version}`;
-  const wantedSource = `${CHRONOS_PI_PACKAGE}#${wantedRef}`;
+  // Pin with `@<ref>`, NOT `#<ref>`: pi's URL parser mishandles the `#` fragment
+  // form and passes it straight to `git clone` (which fails). The `@` form is
+  // split into a clean repo URL + a checkout ref.
+  const wantedSource = `${CHRONOS_PI_PACKAGE}@${wantedRef}`;
   const refKey = "chronos.piPackageRef";
 
   if (!hasPi()) {
