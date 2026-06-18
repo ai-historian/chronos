@@ -1,6 +1,6 @@
 {
   "name": "chronos",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "AI economic historian agent for digitizing historical German city directories",
   "type": "module",
   "keywords": ["pi-package"],
