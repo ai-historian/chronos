@@ -42,6 +42,18 @@ jobs:
         working-directory: chronos-vscode
         run: npm run build
 
+      # Guard against the two release-packaging bugs we hit: a stale webview
+      # bundle (missing UI components) and a dropped external dep (mupdf).
+      # Package the real .vsix (vscode:prepublish rebuilds it) and assert both.
+      - name: Verify packaged .vsix contents
+        working-directory: chronos-vscode
+        run: |
+          npx vsce package -o /tmp/chronos.vsix
+          unzip -p /tmp/chronos.vsix extension/out/webview/main.js | grep -q "chronos-data-viewer" \
+            || { echo "::error::data viewer missing from packaged webview bundle (stale out/?)"; exit 1; }
+          unzip -l /tmp/chronos.vsix | grep -q "node_modules/mupdf/" \
+            || { echo "::error::mupdf missing from package (esbuild marks it external)"; exit 1; }
+
   ui-test:
     name: UI test (headless VS Code)
     runs-on: ubuntu-latest

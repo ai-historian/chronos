@@ -2,7 +2,7 @@
   "name": "chronos-ai-historian",
   "displayName": "Chronos — The AI Historian",
   "description": "AI-powered assistant that supports historians",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "AI-Historian",
   "license": "MIT",
   "icon": "icon.png",
@@ -55,6 +55,7 @@
     }
   },
   "scripts": {
+    "vscode:prepublish": "npm run build",
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "package": "vsce package",
