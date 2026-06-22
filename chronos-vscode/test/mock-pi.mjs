@@ -12,6 +12,29 @@
 import { createInterface } from "node:readline";
 import { request } from "node:http";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
+
+// Workspace-skills contract: real pi only discovers <ws>/skills/<name>/SKILL.md
+// when it's pointed there, and the extension must do that via `--skill <ws>/skills`
+// (the .pi/settings.json bridge is trust-gated and dropped in headless rpc mode —
+// see rpc/pi-rpc-session.ts). We mirror that here: surface skill:range-finder iff
+// we were spawned with a --skill flag whose dir actually contains that skill. If
+// the extension stops passing --skill, get_commands returns no skill and the UI
+// test fails — guarding the fix end to end.
+function discoveredSkills() {
+  const i = process.argv.indexOf("--skill");
+  if (i === -1 || i + 1 >= process.argv.length) return [];
+  const dir = process.argv[i + 1];
+  if (!existsSync(join(dir, "range-finder", "SKILL.md"))) return [];
+  return [
+    {
+      name: "skill:range-finder",
+      description: "Find the page range covering a given record type.",
+      source: "skill",
+      sourceInfo: { origin: "top-level", scope: "project" },
+    },
+  ];
+}
 
 const MODEL = {
   id: "mock-model",
@@ -152,7 +175,7 @@ rl.on("line", (line) => {
       respond(type, id, { models: [model] });
       break;
     case "get_commands":
-      respond(type, id, { commands: [] });
+      respond(type, id, { commands: discoveredSkills() });
       break;
     case "get_messages":
     case "get_fork_messages":

@@ -31,6 +31,13 @@ writeFileSync(
     "base64",
   ),
 );
+// A workspace skill — must surface in the / menu (the mock returns it only when
+// the extension spawns pi with --skill <ws>/skills; see suite.js step 7).
+mkdirSync(join(fixture, "skills", "range-finder"), { recursive: true });
+writeFileSync(
+  join(fixture, "skills", "range-finder", "SKILL.md"),
+  "---\nname: range-finder\ndescription: Find the page range covering a given record type.\n---\n\n# Range Finder\n",
+);
 writeFileSync(join(fixture, ".vscode", "settings.json"), JSON.stringify({ "chronos.piPath": mockPi }, null, 2));
 writeFileSync(join(fixture, ".chronos", ".env"), "");
 

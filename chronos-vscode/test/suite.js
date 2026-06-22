@@ -155,6 +155,19 @@ exports.run = async function run() {
   });
   check("re-open icon on a tool entry restores the viewer", true);
 
+  // 7. Local workspace skill surfaces in the / command menu. pi gates the
+  //    .pi/settings.json skills bridge behind project-trust and drops it in
+  //    headless rpc mode, so the extension must spawn pi with `--skill
+  //    <ws>/skills`. The mock returns skill:range-finder ONLY when launched with
+  //    that flag pointing at the fixture's skills dir — so this guards the
+  //    spawn-arg fix end to end (remove --skill in pi-rpc-session → this fails).
+  api.chronosTest.invoke("openCommandMenu", "");
+  await waitFor("skill command in / menu", async () => {
+    const entries = (await dump())?.chat?.menu?.entries || [];
+    return entries.some((e) => e.name === "skill:range-finder" && e.source === "skill");
+  });
+  check("local workspace skill appears in / command menu", true);
+
   // Make sure the subprocess stayed alive throughout
   const after = api.getChronosStatus();
   check("pi subprocess still alive", after?.agentStatus === "ready", after?.lastError);

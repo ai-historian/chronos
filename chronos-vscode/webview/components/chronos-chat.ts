@@ -467,12 +467,21 @@ export class ChronosChat extends LitElement {
     this.postMessage({ type: "prompt", text });
   }
 
+  // Open the slash-command menu as if the user typed "/<query>" (integration
+  // tests) so testSnapshot().menu reflects what the menu would render.
+  testOpenMenu(query: string): void {
+    this.menuQuery = query ?? "";
+    this.menuActive = 0;
+    this.menuOpen = true;
+  }
+
   testSnapshot(): {
     itemCount: number;
     userCount: number;
     toolNames: string[];
     lastAssistant: string;
     running: boolean;
+    menu: { open: boolean; entries: { name: string; source: string; description: string }[] };
   } {
     const assistant = [...this.items].reverse().find((i) => i.kind === "assistant") as
       | { kind: "assistant"; message: AssistantMessage }
@@ -483,6 +492,14 @@ export class ChronosChat extends LitElement {
       toolNames: this.items.filter((i) => i.kind === "tool").map((i) => (i as ToolItem).toolName),
       lastAssistant: assistant ? messageText(assistant.message.content) : "",
       running: this.running,
+      menu: {
+        open: this.menuOpen,
+        entries: this.filteredCommands().map((c) => ({
+          name: c.name,
+          source: c.source,
+          description: c.description ?? "",
+        })),
+      },
     };
   }
 

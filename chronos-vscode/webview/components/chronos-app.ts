@@ -239,6 +239,9 @@ export class ChronosApp extends LitElement {
       case "sendPrompt":
         this.chat?.testSubmit(arg ?? "");
         break;
+      case "openCommandMenu":
+        this.chat?.testOpenMenu(arg ?? "");
+        break;
       case "openDataTab":
         this.viewerTab = "data";
         this.postMessage({ type: "data/listRequest" });
