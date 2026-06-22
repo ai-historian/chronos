@@ -181,8 +181,13 @@ async function initWorkspace(folder: string): Promise<boolean> {
     mkdirSync(join(folder, dir), { recursive: true });
   }
 
-  // Bridge the workspace-level skills/ dir into pi's resource discovery
-  // (pi auto-discovers from .pi/skills only; we point it at ../skills instead).
+  // Bridge the workspace-level skills/ dir into pi for INTERACTIVE pi sessions
+  // launched from this folder (pi natively auto-discovers only .pi/skills, so we
+  // point a settings entry at ../skills instead). NOTE: this project-settings
+  // bridge is gated by pi's project-trust and is silently dropped in headless
+  // rpc mode (no UI to grant trust; defaultProjectTrust "ask" -> untrusted), so
+  // the extension's rpc session loads workspace skills via the non-trust-gated
+  // `--skill <workspace>/skills` flag instead (see rpc/pi-rpc-session.ts).
   writeIfMissing(
     join(folder, ".pi", "settings.json"),
     JSON.stringify({ skills: ["../skills"] }, null, 2) + "\n",

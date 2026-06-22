@@ -14,6 +14,21 @@ fact that slash-command `prompt` responses arrive only after the handler
 finishes). Run this after upgrading the global `pi` install to detect protocol
 drift. Last verified: pi 0.79.1 (2026-06-11).
 
+## Automated: slash-command skills canary
+
+```
+node scripts/skill-canary.mjs [path-to-pi]
+```
+
+Spawns `pi --mode rpc` in a throwaway workspace containing a
+`skills/range-finder/SKILL.md` and asserts the workspace-skills contract: the
+skill surfaces in `get_commands` (as `skill:range-finder`, `source: "skill"`)
+when pi is launched with `--skill <ws>/skills`, and does **not** surface from the
+`.pi/settings.json {"skills":["../skills"]}` bridge alone — because pi gates
+project settings behind project-trust and headless rpc mode is untrusted. This
+is exactly why `PiRpcSession` passes `--skill`; run after upgrading pi to catch
+any change to how skills are enumerated or trusted. Verified: pi 0.79.8.
+
 ## VS Code integration test
 
 ```
