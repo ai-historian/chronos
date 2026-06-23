@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { listPageIds } from "../utils/page-files.js";
 import { sendToExtension } from "../http/http-client.js";
 import type { SourceContext } from "./source-context.js";

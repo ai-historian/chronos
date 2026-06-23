@@ -6,8 +6,8 @@ import {
   type TextContent,
   type ToolCall,
   type UserMessage,
-} from "@mariozechner/pi-ai";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { pageIdToPath } from "../utils/page-files.js";
 import type { ExpertRegistry, ExpertSession } from "./expert-registry.js";
 import { newTaskId } from "./expert-registry.js";

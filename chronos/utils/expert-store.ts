@@ -14,7 +14,7 @@
  */
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Bbox } from "./crop-image.js";
 import type { PersistedToolResult } from "../tools/expert-tools.js";
 
