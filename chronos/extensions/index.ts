@@ -20,6 +20,8 @@ import { listPageIds } from "../utils/page-files.js";
 import { discoverSources } from "../utils/source-discovery.js";
 import { ensureWorkspace } from "../utils/workspace.js";
 import { saveSessionSource, loadSessionSource } from "../utils/session-source-store.js";
+import { getNamedPromptCount, saveSessionName } from "../utils/session-name-store.js";
+import { generateSessionTitle } from "../utils/session-namer.js";
 import { connectHttp, sendToExtension, disconnectHttp } from "../http/http-client.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -198,6 +200,14 @@ export default function (pi: ExtensionAPI) {
     disconnectHttp();
   });
 
+  // Auto-generate a short session title from the user's prompts (once, cached in
+  // a sidecar) so the history list shows something better than the truncated
+  // first message. Best-effort and non-blocking: fire-and-forget so it never
+  // delays the next prompt, and silently keeps the fallback on any failure.
+  pi.on("agent_end", async (_event, ctx) => {
+    void maybeNameSession(ctx);
+  });
+
   pi.on("session_directory", async (event) => {
     return { sessionDir: join(event.cwd, "sessions") };
   });
@@ -241,6 +251,67 @@ function applySource(sourceCtx: SourceContext, workspaceDir: string, sourcePath:
   sourceCtx.sourceName = sourceName;
   sourceCtx.sourceDataDir = sourceDataDir;
   return true;
+}
+
+// ── Session auto-naming ─────────────────────────────────────────────────────
+
+function textOfMessageContent(content: unknown): string | undefined {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const parts = content
+      .filter((b): b is { type: "text"; text: string } => (b as any)?.type === "text")
+      .map((b) => b.text);
+    if (parts.length) return parts.join(" ");
+  }
+  return undefined;
+}
+
+// Genuine user prompts from a session, in order. Skips the synthetic
+// "Source selected: …" follow-up the /select-source command injects.
+function userPromptsFromSession(entries: { type: string; [k: string]: any }[]): string[] {
+  const prompts: string[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "message") continue;
+    const message = entry.message;
+    if (!message || message.role !== "user") continue;
+    const text = textOfMessageContent(message.content)?.trim();
+    if (!text || text.startsWith("Source selected:")) continue;
+    prompts.push(text);
+  }
+  return prompts;
+}
+
+// Refine the title over the first few prompts, then lock it, so a session named
+// after one terse opener still gets a better label as its task takes shape.
+const NAMING_PROMPT_CAP = 3;
+// In-process guard so two near-simultaneous agent_end events don't both fire a
+// generation before either has written its result.
+const namingInFlight = new Set<string>();
+
+// Generate-and-cache a display name for the current session from its user
+// prompts, unless the user named it explicitly or it's already named from at
+// least this many prompts. Never throws.
+async function maybeNameSession(ctx: ExtensionContext): Promise<void> {
+  try {
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (!sessionId) return;
+    if (ctx.sessionManager.getSessionName()) return; // user set a name explicitly
+    if (namingInFlight.has(sessionId)) return; // a generation is already running
+    const prompts = userPromptsFromSession(ctx.sessionManager.getEntries());
+    if (prompts.length === 0) return;
+    const target = Math.min(prompts.length, NAMING_PROMPT_CAP);
+    if (getNamedPromptCount(ctx.cwd, sessionId) >= target) return; // already named from enough prompts
+
+    namingInFlight.add(sessionId);
+    try {
+      const title = await generateSessionTitle(ctx.modelRegistry, prompts);
+      if (title) saveSessionName(ctx.cwd, sessionId, title, target);
+    } finally {
+      namingInFlight.delete(sessionId);
+    }
+  } catch (err) {
+    console.warn("[chronos] session auto-name failed:", (err as Error).message);
+  }
 }
 
 // ── System prompt builder ──────────────────────────────────────────────
