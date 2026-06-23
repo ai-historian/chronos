@@ -53,6 +53,7 @@ interface ExpertToolUse {
   tool: string;
   pageId?: number;
   bbox?: { x: number; y: number; w: number; h: number };
+  detail?: string;
   isError: boolean;
 }
 
@@ -486,6 +487,8 @@ export class ChronosChat extends LitElement {
     running: boolean;
     expertOpen: string | null;
     expertToolLinks: number;
+    expertToolChips: number;
+    expertElevatedChips: number;
   } {
     const assistant = [...this.items].reverse().find((i) => i.kind === "assistant") as
       | { kind: "assistant"; message: AssistantMessage }
@@ -497,8 +500,10 @@ export class ChronosChat extends LitElement {
       lastAssistant: assistant ? messageText(assistant.message.content) : "",
       running: this.running,
       expertOpen: this.openExpert,
-      // Clickable viewer links for the expert's own tool calls, in the open drawer.
+      // Oversight chips for the expert's own tool calls, in the open drawer.
       expertToolLinks: this.querySelectorAll(".expert-turn-tools a.view-link").length,
+      expertToolChips: this.querySelectorAll(".expert-turn-tools .expert-tool").length,
+      expertElevatedChips: this.querySelectorAll(".expert-turn-tools .expert-tool.is-elevated").length,
     };
   }
 
@@ -520,6 +525,8 @@ export class ChronosChat extends LitElement {
             toolUses: [
               { tool: "view_region", pageId: 42, bbox: { x: 0.1, y: 0.3, w: 0.8, h: 0.1 }, isError: false },
               { tool: "view_page", pageId: 43, isError: false },
+              { tool: "grep", detail: '"Müller" in data', isError: false },
+              { tool: "bash", detail: "wc -l data/entries.json", isError: false },
             ],
           },
         },
@@ -1029,21 +1036,38 @@ export class ChronosChat extends LitElement {
     `;
   }
 
-  // One expert tool call (view_region/view_page) as a clickable viewer link, so
-  // the historian can jump to exactly the page/region the expert pulled in.
+  // One expert tool call, for oversight. Page tools (view_region/view_page) are
+  // clickable viewer links so the historian can jump to exactly what the expert
+  // pulled in; file/search/command tools show as a labelled chip with the
+  // command/path/term. Elevated tools (bash/write/edit) are visually flagged.
   private renderExpertToolUse(u: ExpertToolUse): TemplateResult {
-    const label = u.tool === "view_region" ? "⛶ region" : u.tool === "view_page" ? "page" : u.tool.replace(/_/g, " ");
-    if (u.pageId == null) {
-      return html`<span class="expert-tool ${u.isError ? "is-error" : ""}">${label}</span>`;
+    if (u.pageId != null && (u.tool === "view_region" || u.tool === "view_page")) {
+      const label = u.tool === "view_region" ? "⛶ region" : "page";
+      const bboxAttr = u.bbox ? `${u.bbox.x},${u.bbox.y},${u.bbox.w},${u.bbox.h}` : undefined;
+      return html`<a
+        class="view-link expert-tool ${u.isError ? "is-error" : ""} ${bboxAttr ? "view-link-has-sel" : ""}"
+        href="#"
+        title=${u.isError ? "This lookup failed" : `Jump to p.${u.pageId}`}
+        data-page=${u.pageId}
+        data-bbox=${bboxAttr ?? nothing}
+        >${label} p.${u.pageId}</a
+      >`;
     }
-    const bboxAttr = u.bbox ? `${u.bbox.x},${u.bbox.y},${u.bbox.w},${u.bbox.h}` : undefined;
-    return html`<a
-      class="view-link expert-tool ${u.isError ? "is-error" : ""} ${bboxAttr ? "view-link-has-sel" : ""}"
-      href="#"
-      title=${u.isError ? "This lookup failed" : `Jump to p.${u.pageId}`}
-      data-page=${u.pageId}
-      data-bbox=${bboxAttr ?? nothing}
-      >${label} p.${u.pageId}</a
+    const labels: Record<string, string> = {
+      read_file: "read",
+      list_dir: "ls",
+      grep: "grep",
+      bash: "⌘ bash",
+      write_file: "✎ write",
+      edit_file: "✎ edit",
+    };
+    const elevated = u.tool === "bash" || u.tool === "write_file" || u.tool === "edit_file";
+    const label = labels[u.tool] ?? u.tool.replace(/_/g, " ");
+    const detail = u.detail ? (u.detail.length > 64 ? u.detail.slice(0, 64) + "…" : u.detail) : "";
+    return html`<span
+      class="expert-tool ${elevated ? "is-elevated" : ""} ${u.isError ? "is-error" : ""}"
+      title=${u.detail ?? ""}
+      >${label}${detail ? html`: ${detail}` : nothing}</span
     >`;
   }
 

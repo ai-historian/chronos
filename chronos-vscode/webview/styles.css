@@ -2162,6 +2162,13 @@ span.expert-tool {
   background: var(--ch-surface-2);
 }
 
+/* Elevated (granted) actions stand out so they're easy to audit. */
+span.expert-tool.is-elevated {
+  color: var(--ch-warning);
+  background: color-mix(in srgb, var(--ch-warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ch-warning) 30%, transparent);
+}
+
 .expert-tool.is-error {
   color: var(--ch-error);
   text-decoration: line-through;
