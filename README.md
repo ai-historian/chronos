@@ -60,7 +60,12 @@ Converting a large PDF can take a few minutes. Imports are crash-safe: a source 
 
 Press `Ctrl+Shift+P` and run **Chronos: Start Agent Session**. The Chronos panel opens — a page viewer on the left and a chat on the right.
 
-On first startup no AI models are available until you connect a provider. Click **Log in** in the panel header (or run **Chronos: Connect AI Provider**), pick your provider, and paste its API key. Chronos saves it to `.chronos/.env` and reconnects automatically. You can switch or add providers the same way at any time.
+On first startup no AI models are available until you connect a provider. Click **Log in** in the panel header (or run **Chronos: Connect AI Provider**) and choose how to sign in:
+
+- **Anthropic — Claude Pro/Max (subscription):** signs in with your Claude subscription via OAuth in the browser — no API key needed. The credential is stored in pi's `~/.pi/agent/auth.json`.
+- **API key (any provider):** paste a key; Chronos saves it to the workspace `.chronos/.env`.
+
+Either way Chronos reconnects automatically. You can switch or add providers the same way at any time.
 
 Pick a source from the header dropdown (or type `/select-source`) and begin working.
 

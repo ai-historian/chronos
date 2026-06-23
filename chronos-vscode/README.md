@@ -18,7 +18,7 @@ Install **Chronos — The AI Historian** from the Extensions view, then run any 
 
 1. **Chronos: Init Workspace** — open an empty folder and run this to create the workspace structure.
 2. **Chronos: Import Sources** — add PDFs, images (PNG/JPG/TIFF/BMP), or text files. PDFs are converted to page images; imports are crash-safe and resumable.
-3. **Chronos: Start Agent Session** — open the page viewer + chat. Click **Log in** in the header to connect your AI provider (or run **Chronos: Connect AI Provider**), then begin extracting data.
+3. **Chronos: Start Agent Session** — open the page viewer + chat. Click **Log in** in the header (or run **Chronos: Connect AI Provider**) to connect a provider — sign in with a **Claude Pro/Max subscription** (OAuth) or paste an **API key** for any provider — then begin extracting data.
 
 ## Documentation
 
