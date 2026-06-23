@@ -39,6 +39,10 @@
         "title": "Chronos: Import Sources"
       },
       {
+        "command": "chronos.login",
+        "title": "Chronos: Connect AI Provider (Log In)"
+      },
+      {
         "command": "chronos.windowSetup",
         "title": "Chronos: Window Setup"
       }

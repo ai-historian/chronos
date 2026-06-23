@@ -21,6 +21,35 @@ function getNonce(): string {
 
 export type AgentStatus = "starting" | "ready" | "failed" | "exited";
 
+// Providers offered by the native login flow → the env var pi reads the key
+// from (see pi-ai env-api-keys). "Other" lets the user name any other var.
+const LOGIN_PROVIDERS: { label: string; envVar: string }[] = [
+  { label: "Anthropic (Claude)", envVar: "ANTHROPIC_API_KEY" },
+  { label: "Google (Gemini)", envVar: "GEMINI_API_KEY" },
+  { label: "OpenAI", envVar: "OPENAI_API_KEY" },
+  { label: "OpenRouter", envVar: "OPENROUTER_API_KEY" },
+  { label: "xAI (Grok)", envVar: "XAI_API_KEY" },
+  { label: "Groq", envVar: "GROQ_API_KEY" },
+  { label: "Mistral", envVar: "MISTRAL_API_KEY" },
+  { label: "DeepSeek", envVar: "DEEPSEEK_API_KEY" },
+];
+
+// Set KEY=value in a .env file, replacing any existing assignment of KEY.
+function upsertEnvVar(envPath: string, key: string, value: string): void {
+  mkdirSync(dirname(envPath), { recursive: true });
+  const kept = existsSync(envPath)
+    ? readFileSync(envPath, "utf-8")
+        .split("\n")
+        .filter((line) => {
+          const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+          return !(m && m[1] === key);
+        })
+    : [];
+  while (kept.length && kept[kept.length - 1].trim() === "") kept.pop();
+  kept.push(`${key}=${value}`);
+  writeFileSync(envPath, kept.join("\n") + "\n", "utf-8");
+}
+
 // pi auto-registers every .md in a package's prompts/ dir as a slash command,
 // but the chronos package ships those files as agent-internal tool text (the
 // system prompt, expert prompts, per-tool descriptions) — not user commands.
@@ -266,8 +295,18 @@ export class ChronosPanel {
     void this.postHistory(state);
     void this.rpc
       ?.request<{ models: ModelInfo[] }>({ type: "get_available_models" })
-      .then((data) => this.post({ type: "models", models: data.models }))
-      .catch(() => {});
+      .then((data) => {
+        const models = data.models ?? [];
+        this.post({ type: "models", models });
+        // No models means no provider is authenticated — surface the login CTA.
+        this.post({ type: "loginRequired", required: models.length === 0 });
+      })
+      .catch(() => {
+        // The agent already started (rpc.start resolved), so a transient
+        // get_available_models failure shouldn't strand a stale "logged out"
+        // banner after a successful login — clear it; the next re-seed corrects it.
+        this.post({ type: "loginRequired", required: false });
+      });
     void this.rpc
       ?.request<{ commands: RpcSlashCommand[] }>({ type: "get_commands" })
       .then((data) => this.post({ type: "commands", commands: (data.commands ?? []).filter(isUserCommand) }))
@@ -338,6 +377,54 @@ export class ChronosPanel {
     this.rpc = null;
     await this.startAgent();
     this.post({ type: "agentRestarted" });
+  }
+
+  /**
+   * Connect an AI provider without leaving the panel: pick a provider, enter its
+   * API key, persist it to .chronos/.env, and restart the agent so pi picks it
+   * up. Provider-agnostic — pi reads <PROVIDER>_API_KEY from the subprocess env.
+   * (pi's own /login is a TUI-only flow with no RPC equivalent.)
+   */
+  async promptLogin(): Promise<void> {
+    const items: (vscode.QuickPickItem & { envVar: string })[] = [
+      ...LOGIN_PROVIDERS.map((p) => ({ label: p.label, detail: p.envVar, envVar: p.envVar })),
+      { label: "Other provider…", detail: "Enter the API-key environment variable name", envVar: "" },
+    ];
+    const picked = await vscode.window.showQuickPick(items, {
+      placeHolder: "Connect an AI provider — the key is saved to .chronos/.env",
+    });
+    if (!picked) return;
+
+    let envVar = picked.envVar;
+    if (!envVar) {
+      envVar = (
+        await vscode.window.showInputBox({
+          prompt: "API-key environment variable name",
+          placeHolder: "e.g. TOGETHER_API_KEY",
+        })
+      )?.trim() ?? "";
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envVar)) return;
+    }
+
+    const key = (
+      await vscode.window.showInputBox({
+        prompt: `Enter your ${picked.label} API key`,
+        password: true,
+        ignoreFocusOut: true,
+      })
+    )?.trim();
+    if (!key) return;
+
+    try {
+      upsertEnvVar(join(this.workspaceDir, ".chronos", ".env"), envVar, key);
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Could not write .chronos/.env: ${(err as Error).message}` });
+      return;
+    }
+    // Make the new key live for the next spawn and restart so models populate.
+    this.agentEnv[envVar] = key;
+    this.post({ type: "notify", level: "info", message: `Saved ${envVar}. Restarting agent…` });
+    await this.restartAgent();
   }
 
   // ── viewer ────────────────────────────────────────────────────────────────
@@ -532,12 +619,21 @@ export class ChronosPanel {
           if (result && !result.cancelled) {
             this.currentSourceDir = undefined;
             this.currentSourceName = undefined;
+            // Re-arm the Data-tab refresh guard so re-selecting the same source
+            // (or restoring it on resume) repopulates the (now-cleared) Data tab.
+            this.lastDataSource = undefined;
             this.post({ type: "history", messages: [] });
+            // The new session has no source bound — clear the viewer + dropdown so
+            // the display matches (don't leave the previous source showing).
+            this.post({ type: "viewer/clearSource" });
             await this.refreshState();
             this.postSessions();
           }
           break;
         }
+        case "login":
+          await this.promptLogin();
+          break;
         case "resumeSession": {
           try {
             const result = await this.rpc?.request<{ cancelled: boolean }>(
