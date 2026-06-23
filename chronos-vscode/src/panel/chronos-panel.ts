@@ -9,6 +9,15 @@ import type { AgentToExtensionMessage } from "../protocol";
 import type { Bbox, ExtToWebview, WebviewToExt } from "./webview-protocol";
 import { discoverSources, countPages } from "./sources";
 import { listSessions, readSessionMessages } from "./sessions";
+import {
+  beginAnthropicLogin,
+  startCallbackServer,
+  completeAnthropicLogin,
+  parseAuthorizationInput,
+  type AnthropicOAuthCredentials,
+  type AuthCode,
+  type CallbackServer,
+} from "../anthropic-oauth";
 
 function getNonce(): string {
   let text = "";
@@ -48,6 +57,25 @@ function upsertEnvVar(envPath: string, key: string, value: string): void {
   while (kept.length && kept[kept.length - 1].trim() === "") kept.pop();
   kept.push(`${key}=${value}`);
   writeFileSync(envPath, kept.join("\n") + "\n", "utf-8");
+}
+
+// Write an Anthropic OAuth credential into pi's global auth store
+// (~/.pi/agent/auth.json), merging with any existing providers. This is the
+// same file/shape pi's own /login writes, so pi reads and refreshes it.
+function writeAnthropicOAuth(creds: AnthropicOAuthCredentials): void {
+  const authPath = join(homedir(), ".pi", "agent", "auth.json");
+  let store: Record<string, unknown> = {};
+  if (existsSync(authPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(authPath, "utf-8"));
+      if (parsed && typeof parsed === "object") store = parsed as Record<string, unknown>;
+    } catch {
+      store = {};
+    }
+  }
+  store.anthropic = { type: "oauth", refresh: creds.refresh, access: creds.access, expires: creds.expires };
+  mkdirSync(dirname(authPath), { recursive: true });
+  writeFileSync(authPath, JSON.stringify(store, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
 }
 
 // pi auto-registers every .md in a package's prompts/ dir as a slash command,
@@ -386,17 +414,37 @@ export class ChronosPanel {
    * (pi's own /login is a TUI-only flow with no RPC equivalent.)
    */
   async promptLogin(): Promise<void> {
-    const items: (vscode.QuickPickItem & { envVar: string })[] = [
-      ...LOGIN_PROVIDERS.map((p) => ({ label: p.label, detail: p.envVar, envVar: p.envVar })),
-      { label: "Other provider…", detail: "Enter the API-key environment variable name", envVar: "" },
+    type LoginItem = vscode.QuickPickItem & {
+      action: "oauth-anthropic" | "api-key" | "other";
+      envVar?: string;
+      provider?: string;
+    };
+    const items: LoginItem[] = [
+      {
+        label: "Anthropic — Claude Pro/Max (subscription sign-in)",
+        detail: "OAuth — uses your Claude subscription, no API key",
+        action: "oauth-anthropic",
+      },
+      ...LOGIN_PROVIDERS.map((p): LoginItem => ({
+        label: `${p.label} — API key`,
+        detail: p.envVar,
+        action: "api-key",
+        envVar: p.envVar,
+        provider: p.label,
+      })),
+      { label: "Other provider — API key…", detail: "Enter the environment variable name", action: "other" },
     ];
-    const picked = await vscode.window.showQuickPick(items, {
-      placeHolder: "Connect an AI provider — the key is saved to .chronos/.env",
-    });
+    const picked = await vscode.window.showQuickPick(items, { placeHolder: "Connect an AI provider" });
     if (!picked) return;
 
-    let envVar = picked.envVar;
-    if (!envVar) {
+    if (picked.action === "oauth-anthropic") {
+      await this.loginAnthropicSubscription();
+      return;
+    }
+
+    let envVar = picked.envVar ?? "";
+    let providerLabel = picked.provider ?? "provider";
+    if (picked.action === "other") {
       envVar = (
         await vscode.window.showInputBox({
           prompt: "API-key environment variable name",
@@ -404,11 +452,12 @@ export class ChronosPanel {
         })
       )?.trim() ?? "";
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envVar)) return;
+      providerLabel = envVar;
     }
 
     const key = (
       await vscode.window.showInputBox({
-        prompt: `Enter your ${picked.label} API key`,
+        prompt: `Enter your ${providerLabel} API key`,
         password: true,
         ignoreFocusOut: true,
       })
@@ -424,6 +473,86 @@ export class ChronosPanel {
     // Make the new key live for the next spawn and restart so models populate.
     this.agentEnv[envVar] = key;
     this.post({ type: "notify", level: "info", message: `Saved ${envVar}. Restarting agent…` });
+    await this.restartAgent();
+  }
+
+  /**
+   * Anthropic subscription (Claude Pro/Max) login via OAuth, driven entirely
+   * from the panel: open the browser, capture the redirect on a localhost
+   * callback (or accept a pasted code), exchange it for tokens, write the
+   * credential to ~/.pi/agent/auth.json (what pi reads), and restart the agent.
+   */
+  private async loginAnthropicSubscription(): Promise<void> {
+    let codeRes: AuthCode | undefined;
+    let verifier = "";
+    try {
+      const begun = await beginAnthropicLogin();
+      verifier = begun.verifier;
+      let server: CallbackServer | undefined;
+      try {
+        server = await startCallbackServer();
+      } catch {
+        server = undefined; // port unavailable → fall back to manual code entry
+      }
+      try {
+        codeRes = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, cancellable: true, title: "Connect Claude (Pro/Max)" },
+          async (progress, token) => {
+            await vscode.env.openExternal(vscode.Uri.parse(begun.authUrl));
+            progress.report({
+              message: server
+                ? "Approve access in your browser — you'll return here automatically. Cancel to paste the code instead."
+                : "Approve access in your browser, then paste the code.",
+            });
+            if (!server) return undefined;
+            token.onCancellationRequested(() => server!.cancel());
+            return await server.waitForCode();
+          },
+        );
+      } finally {
+        server?.close();
+      }
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Claude sign-in failed: ${(err as Error).message}` });
+      return;
+    }
+
+    // No automatic redirect (cancelled, remote browser, or port busy) → paste it.
+    if (!codeRes) {
+      const pasted = (
+        await vscode.window.showInputBox({
+          prompt: "Paste the authorization code or the full redirect URL from your browser",
+          ignoreFocusOut: true,
+        })
+      )?.trim();
+      if (!pasted) return; // cancelled
+      const parsed = parseAuthorizationInput(pasted);
+      if (!parsed.code) {
+        this.post({ type: "notify", level: "error", message: "No authorization code found in the pasted value." });
+        return;
+      }
+      if (parsed.state && parsed.state !== verifier) {
+        this.post({ type: "notify", level: "error", message: "OAuth state mismatch — please retry the sign-in." });
+        return;
+      }
+      codeRes = { code: parsed.code, state: parsed.state ?? verifier };
+    }
+
+    let creds: AnthropicOAuthCredentials;
+    try {
+      creds = await completeAnthropicLogin({ code: codeRes.code, state: codeRes.state ?? verifier, verifier });
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Claude sign-in failed: ${(err as Error).message}` });
+      return;
+    }
+
+    try {
+      writeAnthropicOAuth(creds);
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Could not write auth.json: ${(err as Error).message}` });
+      return;
+    }
+    this.post({ type: "notify", level: "info", message: "Connected to Claude (Pro/Max). Restarting agent…" });
     await this.restartAgent();
   }
 
