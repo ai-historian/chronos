@@ -23,9 +23,14 @@ export interface ChronosSessionInfo {
   path: string;
   name: string;
   timestamp: number;
+  /** Count of USER prompts in the session (not assistant/tool messages). */
   messageCount: number;
   firstUserMessage?: string;
   sizeBytes?: number;
+  /** pi session id (header.id) — keys the auto-name sidecar. */
+  sessionId?: string;
+  /** Explicit user-set name (pi session_info), if any. Absent → name is a fallback. */
+  userName?: string;
 }
 
 export type ExtToWebview =
@@ -46,6 +51,10 @@ export type ExtToWebview =
   | { type: "sources"; sources: { name: string; pageCount: number }[] }
   | { type: "sessions"; sessions: ChronosSessionInfo[] }
   | { type: "resumeResult"; ok: boolean }
+  // auth: no models are available until the user connects a provider
+  | { type: "loginRequired"; required: boolean }
+  // new session: clear the viewer + source dropdown so display matches selection
+  | { type: "viewer/clearSource" }
   // viewer (image URI already resolved via asWebviewUri)
   | {
       type: "viewer/showPage";
@@ -79,6 +88,8 @@ export type WebviewToExt =
   | { type: "abort" }
   | { type: "restartAgent" }
   | { type: "newSession" }
+  // connect an AI provider: pick a provider, enter its API key, restart the agent
+  | { type: "login" }
   | { type: "resumeSession"; sessionPath: string }
   | { type: "setModel"; provider: string; modelId: string }
   | { type: "setThinkingLevel"; level: ThinkingLevel }
