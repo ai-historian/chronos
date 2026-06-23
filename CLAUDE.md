@@ -58,7 +58,7 @@ Plain **Lit web components** (no React), bundled by esbuild to `out/webview/main
 
 `chronos/extensions/index.ts` is the pi-package entrypoint: it registers tools, the `/select-source` and `/yolo` commands, and lifecycle hooks. Tools live in `chronos/tools/` and share a mutable `SourceContext` (`tools/source-context.ts`) so `change_source` can redirect all source-bound tools at runtime. The system prompt is **rebuilt every turn** by the `before_agent_start` hook from `prompts/system-prompt.md` + the current `SourceContext` — it is never part of the persisted message history.
 
-Key tools: `task`/`task_batch` (spawn persistent vision-expert subagents per page, follow-up-able via `task_id`), `list_pages`, `show_page`/`show_text` (viewer), `change_source`. Expert models are any `provider/model-id` pi has auth for (default `google/gemini-3-flash-preview`).
+Key tools: `task`/`task_batch` (spawn persistent vision-expert subagents per page, follow-up-able via `task_id`; the expert runs a bounded tool loop and can `view_region`/`view_page` to self-zoom), `list_pages`, `show_page`/`show_text` (viewer), `change_source`. Expert models are any `provider/model-id` pi has auth for; no provider is hardcoded — they default to the orchestrator's current model.
 
 ### Important runtime facts
 
@@ -69,7 +69,7 @@ Key tools: `task`/`task_batch` (spawn persistent vision-expert subagents per pag
 
 ### Workspace layout (user-facing, created by `Chronos: Init Workspace`)
 
-A Chronos *workspace* (separate from this repo) contains `sources/<name>/png/page_NNNN.png`, `data/` (outputs), `memory/` (`MEMORY.MD` + per-source `.md`, injected into the system prompt), `skills/<name>/SKILL.md`, `sessions/`, and `.chronos/` (`.env` with `GEMINI_API_KEY`, `settings.json` for the `yolo` flag, `session-sources.json` mapping session id → selected source for resume). The workspace `skills/` dir is bridged into pi via `.pi/settings.json` (`{ "skills": ["../skills"] }`).
+A Chronos *workspace* (separate from this repo) contains `sources/<name>/png/page_NNNN.png`, `data/` (outputs), `memory/` (`MEMORY.MD` + per-source `.md`, injected into the system prompt), `skills/<name>/SKILL.md`, `sessions/`, and `.chronos/` (`.env` with provider API keys e.g. `ANTHROPIC_API_KEY`/`GEMINI_API_KEY`, written by the panel's "Log in" flow; `settings.json` for the `yolo` flag; `session-sources.json` mapping session id → selected source for resume; `session-names.json` caching auto-generated session titles). The workspace `skills/` dir is bridged into pi via `.pi/settings.json` (`{ "skills": ["../skills"] }`).
 
 ## Reference
 
