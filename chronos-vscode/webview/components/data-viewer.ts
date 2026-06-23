@@ -31,10 +31,10 @@ interface Preview {
 }
 
 type Parsed =
-  | { kind: "table"; columns: string[]; rows: Row[]; provenance: (Provenance | null)[] }
+  | { kind: "table"; columns: string[]; rows: Row[]; provenance: Provenance[][] }
   | { kind: "text"; text: string };
 
-// Coerce a chronos_bbox value ([x,y,w,h] or {x,y,w,h}) to a Bbox, else null.
+// Coerce a single chronos_bbox value ([x,y,w,h] or {x,y,w,h}) to a Bbox, else null.
 function toBbox(value: unknown): Bbox | null {
   if (Array.isArray(value) && value.length === 4 && value.every((n) => typeof n === "number")) {
     const [x, y, w, h] = value as number[];
@@ -49,12 +49,54 @@ function toBbox(value: unknown): Bbox | null {
   return null;
 }
 
-function rowProvenance(row: Row): Provenance | null {
-  const raw = row[RESERVED.page];
-  const pageId = typeof raw === "number" ? raw : typeof raw === "string" ? parseInt(raw, 10) : NaN;
-  if (isNaN(pageId)) return null;
-  const sourcePath = typeof row[RESERVED.source] === "string" ? (row[RESERVED.source] as string) : undefined;
-  return { pageId, bbox: toBbox(row[RESERVED.bbox]), sourcePath };
+// Normalize a scalar-or-list value to a list. A bare scalar becomes a single
+// element; null/undefined becomes empty. (Bbox needs special handling — a single
+// bbox is itself an array of 4 — so it is not routed through here.)
+function toList(value: unknown): unknown[] {
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+// Length-preserving: invalid entries become NaN rather than being dropped, so a
+// hole in chronos_page doesn't shift the index alignment with bbox/source. The
+// NaN slot is skipped per-index in rowProvenance.
+function pageList(value: unknown): number[] {
+  return toList(value).map((v) => (typeof v === "number" ? v : typeof v === "string" ? parseInt(v, 10) : NaN));
+}
+
+function sourceList(value: unknown): (string | undefined)[] {
+  return toList(value).map((v) => (typeof v === "string" ? v : undefined));
+}
+
+// chronos_bbox may be a single bbox ({x,y,w,h} or [x,y,w,h]) or a list of them.
+function bboxList(value: unknown): (Bbox | null)[] {
+  if (value === undefined || value === null) return [];
+  const single = toBbox(value);
+  if (single) return [single];
+  if (Array.isArray(value)) return value.map(toBbox);
+  return [];
+}
+
+// A row may cite several (source, page, bbox) locations via list-valued reserved
+// keys; a scalar is treated as a single-element list (backward compatible). Lists
+// align by index; a length-1 list broadcasts (e.g. one source shared across pages,
+// or several bboxes on a single page). A reference must resolve to a page id.
+function rowProvenance(row: Row): Provenance[] {
+  const pages = pageList(row[RESERVED.page]);
+  const bboxes = bboxList(row[RESERVED.bbox]);
+  const sources = sourceList(row[RESERVED.source]);
+  const count = Math.max(pages.length, bboxes.length, sources.length);
+  const at = <T,>(list: T[], i: number): T | undefined => (list.length === 1 ? list[0] : list[i]);
+
+  const refs: Provenance[] = [];
+  for (let i = 0; i < count; i++) {
+    const pageId = at(pages, i);
+    // Skip just this slot when the page is missing/invalid — keep every other
+    // reference aligned with its own bbox/source (don't shift the rest).
+    if (pageId === undefined || Number.isNaN(pageId)) continue;
+    refs.push({ pageId, bbox: at(bboxes, i) ?? null, sourcePath: at(sources, i) ?? undefined });
+  }
+  return refs;
 }
 
 function formatCell(value: unknown): string {
@@ -132,6 +174,16 @@ export class ChronosDataViewer extends LitElement {
     this.loading = false;
   }
 
+  /** Reset to the empty state (no source bound) — e.g. when a new session starts. */
+  clearSource(): void {
+    this.sourceName = "";
+    this.files = [];
+    this.selected = null;
+    this.content = null;
+    this.loading = false;
+    this.preview = null;
+  }
+
   private selectFile(filename: string | null): void {
     this.selected = filename;
     this.content = null;
@@ -180,7 +232,7 @@ export class ChronosDataViewer extends LitElement {
     return { kind: "table", columns, rows, provenance };
   }
 
-  private sortRows(parsed: Extract<Parsed, { kind: "table" }>): { rows: Row[]; provenance: (Provenance | null)[] } {
+  private sortRows(parsed: Extract<Parsed, { kind: "table" }>): { rows: Row[]; provenance: Provenance[][] } {
     if (!this.sortColumn) return { rows: parsed.rows, provenance: parsed.provenance };
     const col = this.sortColumn;
     const dir = this.sortDir;
@@ -221,6 +273,10 @@ export class ChronosDataViewer extends LitElement {
 
   // Host resolved the page image — fill in the preview and crop it.
   showSourcePreview(imageUri: string, pageId: number, bbox: Bbox | null, sourceName: string): void {
+    // Drop a preview that resolved after the source was cleared (e.g. a new
+    // session cleared us while this request was in flight) — clearSource() sets
+    // sourceName to "", so an empty source means nothing should be shown.
+    if (!this.sourceName) return;
     this.preview = { ...(this.preview ?? {}), pageId, bbox, sourceName, imageUri };
     void this.updateComplete.then(() => this.applyPreviewCrop());
   }
@@ -290,8 +346,8 @@ export class ChronosDataViewer extends LitElement {
     if (this.content === null) return;
     const parsed = this.parse(this.content);
     if (parsed.kind !== "table") return;
-    const prov = parsed.provenance.find((p): p is Provenance => p !== null);
-    if (prov) this.viewSource(prov);
+    const refs = parsed.provenance.find((r) => r.length > 0);
+    if (refs && refs[0]) this.viewSource(refs[0]);
   }
 
   testShowFullPage(): void {
@@ -306,6 +362,7 @@ export class ChronosDataViewer extends LitElement {
     rowCount: number;
     columns: string[];
     hasProvenance: boolean;
+    provenanceCounts: number[];
     preview: { pageId: number; hasImage: boolean } | null;
   } {
     const parsed = this.content !== null ? this.parse(this.content) : null;
@@ -316,7 +373,8 @@ export class ChronosDataViewer extends LitElement {
       kind: parsed?.kind ?? null,
       rowCount: parsed?.kind === "table" ? parsed.rows.length : 0,
       columns: parsed?.kind === "table" ? parsed.columns : [],
-      hasProvenance: parsed?.kind === "table" ? parsed.provenance.some(Boolean) : false,
+      hasProvenance: parsed?.kind === "table" ? parsed.provenance.some((r) => r.length > 0) : false,
+      provenanceCounts: parsed?.kind === "table" ? parsed.provenance.map((r) => r.length) : [],
       preview: this.preview ? { pageId: this.preview.pageId, hasImage: !!this.preview.imageUri } : null,
     };
   }
@@ -421,7 +479,7 @@ export class ChronosDataViewer extends LitElement {
 
   private renderTable(parsed: Extract<Parsed, { kind: "table" }>): TemplateResult {
     const { rows, provenance } = this.sortRows(parsed);
-    const hasProvenance = provenance.some(Boolean);
+    const hasProvenance = provenance.some((refs) => refs.length > 0);
     return html`
       <table class="dv-table">
         <thead>
@@ -436,15 +494,21 @@ export class ChronosDataViewer extends LitElement {
         </thead>
         <tbody>
           ${rows.map((row, i) => {
-            const prov = provenance[i];
+            const refs = provenance[i];
             return html`<tr>
               ${hasProvenance
                 ? html`<td class="dv-prov">
-                    ${prov
-                      ? html`<button class="dv-view" title="View source p.${prov.pageId}" @click=${() => this.viewSource(prov)}>
+                    <span class="dv-prov-list">
+                      ${refs.map(
+                        (prov) => html`<button
+                          class="dv-view"
+                          title="View source p.${prov.pageId}${prov.sourcePath ? ` · ${prov.sourcePath}` : ""}"
+                          @click=${() => this.viewSource(prov)}
+                        >
                           p.${prov.pageId}
-                        </button>`
-                      : nothing}
+                        </button>`,
+                      )}
+                    </span>
                   </td>`
                 : nothing}
               ${parsed.columns.map((c) => html`<td>${formatCell(row[c])}</td>`)}

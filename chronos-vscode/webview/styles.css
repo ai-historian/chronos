@@ -298,6 +298,57 @@ chronos-app,
   color: var(--ch-fg);
 }
 
+/* Login button draws attention only while no provider is connected. */
+.header-btn.login-btn.is-attn {
+  color: var(--ch-accent-fg);
+  background: var(--ch-accent);
+}
+
+.header-btn.login-btn.is-attn:hover {
+  background: color-mix(in srgb, var(--ch-accent) 85%, white);
+  color: var(--ch-accent-fg);
+}
+
+/* ── "no models — connect a provider" banner (auth required) ──────────────── */
+
+.login-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 16px;
+  background: color-mix(in srgb, var(--ch-accent) 12%, var(--ch-bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--ch-accent) 35%, transparent);
+  font-size: 12.5px;
+}
+
+.login-banner-text {
+  flex: 1 1 auto;
+  color: var(--ch-fg);
+}
+
+.login-banner-text code {
+  font-size: 11.5px;
+  padding: 1px 4px;
+  border-radius: var(--ch-radius-sm);
+  background: var(--ch-surface-2);
+}
+
+.login-banner-btn {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 14px;
+  border-radius: var(--ch-radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ch-accent-fg);
+  background: var(--ch-accent);
+  transition: background 120ms ease;
+}
+
+.login-banner-btn:hover {
+  background: color-mix(in srgb, var(--ch-accent) 85%, white);
+}
+
 #app-main {
   flex: 1 1 auto;
   display: flex;
@@ -2510,7 +2561,14 @@ chronos-data-viewer,
 
 .dv-prov {
   text-align: center;
-  white-space: nowrap;
+}
+
+/* A row can cite several source references — wrap the chips, don't overflow. */
+.dv-prov-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  justify-content: center;
 }
 
 .dv-view {

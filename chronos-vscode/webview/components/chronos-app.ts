@@ -38,6 +38,7 @@ export class ChronosApp extends LitElement {
     contextTokens: { state: true },
     sessionLoading: { state: true },
     viewerTab: { state: true },
+    loginRequired: { state: true },
   };
 
   declare state: RpcSessionState | null;
@@ -53,6 +54,7 @@ export class ChronosApp extends LitElement {
   declare contextTokens: number;
   declare sessionLoading: { title?: string; name: string; sizeBytes?: number } | null;
   declare viewerTab: "page" | "data";
+  declare loginRequired: boolean;
 
   private postMessage: (msg: WebviewToExt) => void = () => {};
   private uiRequestQueue: RpcExtensionUIRequest[] = [];
@@ -73,6 +75,7 @@ export class ChronosApp extends LitElement {
     this.contextTokens = 0;
     this.sessionLoading = null;
     this.viewerTab = "page";
+    this.loginRequired = false;
   }
 
   // Context occupancy = what the next request will carry: fresh input +
@@ -129,6 +132,16 @@ export class ChronosApp extends LitElement {
         break;
       case "models":
         this.models = msg.models;
+        break;
+      case "loginRequired":
+        this.loginRequired = msg.required;
+        break;
+      case "viewer/clearSource":
+        // New session has no source bound — reset the display to match.
+        this.currentSource = "";
+        this.viewer?.clearSource();
+        this.dataViewer?.clearSource();
+        this.viewerTab = "page";
         break;
       case "commands":
         this.chat?.setCommands(msg.commands);
@@ -246,6 +259,9 @@ export class ChronosApp extends LitElement {
       case "openPageTab":
         this.viewerTab = "page";
         break;
+      case "newSession":
+        this.postMessage({ type: "newSession" });
+        break;
       case "selectDataFile":
         if (arg) this.dataViewer?.testSelect(arg);
         break;
@@ -313,6 +329,7 @@ export class ChronosApp extends LitElement {
     return html`
       <div id="app-root" @keydown=${(e: KeyboardEvent) => { if (this.viewerTab === "page") this.viewer?.handleKeydown(e); }}>
         ${this.renderHeader()}
+        ${this.loginRequired ? this.renderLoginBanner() : nothing}
         <div id="app-main">
           <div id="pane-viewer" style="flex-basis:${this.splitPct}%">
             <div class="pv-tabs">
@@ -379,7 +396,9 @@ export class ChronosApp extends LitElement {
                 }
               }}
             >
-              ${!model ? html`<option selected disabled>loading…</option>` : nothing}
+              ${!model
+                ? html`<option selected disabled>${this.loginRequired ? "— log in —" : "loading…"}</option>`
+                : nothing}
               ${this.models.map((m) => {
                 const id = `${m.provider}/${m.id}`;
                 const current = model ? `${model.provider}/${model.id}` === id : false;
@@ -388,6 +407,13 @@ export class ChronosApp extends LitElement {
             </select>
           </label>
           ${this.renderContextMeter()}
+          <button
+            class="header-btn login-btn ${this.loginRequired ? "is-attn" : ""}"
+            title="Connect an AI provider (saves an API key to .chronos/.env)"
+            @click=${() => this.postMessage({ type: "login" })}
+          >
+            Log in
+          </button>
           <button
             class="header-btn yolo-toggle ${this.yolo ? "is-on" : ""}"
             title=${this.yolo
@@ -404,6 +430,20 @@ export class ChronosApp extends LitElement {
           <button class="header-btn" title="Start a fresh session" @click=${() => this.postMessage({ type: "newSession" })}>New</button>
         </div>
       </header>
+    `;
+  }
+
+  private renderLoginBanner(): TemplateResult {
+    return html`
+      <div class="login-banner">
+        <span class="login-banner-text">
+          <strong>No AI models available.</strong>
+          Connect a provider to get started — your key is saved to <code>.chronos/.env</code>.
+        </span>
+        <button class="login-banner-btn" @click=${() => this.postMessage({ type: "login" })}>
+          Connect provider
+        </button>
+      </div>
     `;
   }
 

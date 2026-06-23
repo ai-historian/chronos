@@ -163,7 +163,9 @@ function readEnvFile(envPath: string): Record<string, string> {
   if (!existsSync(envPath)) return vars;
   const content = readFileSync(envPath, "utf-8");
   for (const line of content.split("\n")) {
-    const match = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/);
+    // Accept mixed-case names so any var the login flow can write (the "Other
+    // provider…" path allows [A-Za-z_]…) round-trips on the next session.
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
     if (match) vars[match[1]] = match[2].trim();
   }
   return vars;
@@ -205,7 +207,7 @@ data/             Per-source extraction results and outputs
 memory/           Agent memory files (MEMORY.MD, per-source notes)
 skills/           Skill definitions (markdown task instructions)
 sessions/         Agent session logs (auto-generated)
-.chronos/.env     API keys (GEMINI_API_KEY)
+.chronos/.env     Provider API keys (set via "Chronos: Connect AI Provider")
 \`\`\`
 
 ## Getting Started
@@ -234,38 +236,23 @@ sessions/         Agent session logs (auto-generated)
 5. **Browse pages**: Run **"Chronos: Show Page"** to jump the viewer to a
    specific page.
 
-## API Key
+## AI provider
 
-Your Gemini API key is stored in \`.chronos/.env\`. You can edit it there
-or re-run **"Chronos: Init Workspace"** to set a new one.
+Chronos works with any provider \`pi\` supports (Anthropic, Google, OpenAI, …).
+Click **Log in** in the Chronos panel header — or run **"Chronos: Connect AI
+Provider"** — to store an API key in \`.chronos/.env\`. You can also edit that
+file directly (e.g. \`ANTHROPIC_API_KEY=...\`).
 `
   );
 
-  // Ask for Gemini API key
-  const envPath = join(folder, ".chronos", ".env");
-  let apiKey: string | undefined;
-
-  if (existsSync(envPath)) {
-    const overwrite = await vscode.window.showQuickPick(["Keep existing key", "Enter new key"], {
-      placeHolder: "A Gemini API key already exists. What would you like to do?",
-    });
-    if (overwrite === "Enter new key") {
-      apiKey = await vscode.window.showInputBox({
-        prompt: "Enter your Gemini API key",
-        password: true,
-        placeHolder: "AIza...",
-      });
-    }
-  } else {
-    apiKey = await vscode.window.showInputBox({
-      prompt: "Enter your Gemini API key (required for agent to work)",
-      password: true,
-      placeHolder: "AIza...",
-    });
-  }
-
-  if (apiKey !== undefined) {
-    writeFileSync(envPath, `GEMINI_API_KEY=${apiKey}\n`, "utf-8");
+  // Auth is provider-agnostic and set up from the panel ("Log in" button, or the
+  // "Chronos: Connect AI Provider" command), which writes a <PROVIDER>_API_KEY
+  // into .chronos/.env. Just ensure the file exists so there's somewhere to write.
+  const chronosDir = join(folder, ".chronos");
+  const envPath = join(chronosDir, ".env");
+  if (!existsSync(envPath)) {
+    mkdirSync(chronosDir, { recursive: true });
+    writeFileSync(envPath, "# Provider API keys, e.g. ANTHROPIC_API_KEY=... or GEMINI_API_KEY=...\n", "utf-8");
   }
 
   return true;
@@ -799,6 +786,17 @@ export function activate(context: vscode.ExtensionContext): {
           "Chronos workspace initialized. Add source directories to sources/ to get started."
         );
       }
+    }),
+
+    vscode.commands.registerCommand("chronos.login", async () => {
+      const panel = ChronosPanel.active;
+      if (!panel) {
+        vscode.window.showWarningMessage(
+          "Chronos: Start an agent session first (Chronos: Start Agent Session), then connect a provider."
+        );
+        return;
+      }
+      await panel.promptLogin();
     }),
 
     vscode.commands.registerCommand("chronos.windowSetup", async () => {
