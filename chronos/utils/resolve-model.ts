@@ -25,6 +25,20 @@ async function resolveAuth(
   return { apiKey };
 }
 
+/**
+ * The cheapest model (by per-token input+output price) that pi has auth for,
+ * as "provider/model-id", or undefined if none. Used for throwaway helper calls
+ * like session-name summarisation — keep the cost negligible and provider-neutral.
+ */
+export function pickCheapestModelSpec(registry: ModelRegistry): string | undefined {
+  const models = registry.getAvailable();
+  if (models.length === 0) return undefined;
+  const cheapest = [...models].sort(
+    (a, b) => (a.cost.input + a.cost.output) - (b.cost.input + b.cost.output),
+  )[0];
+  return `${cheapest.provider}/${cheapest.id}`;
+}
+
 const MAX_LISTED_MODELS = 40;
 
 function formatAvailable(registry: ModelRegistry, needsVision: boolean): string {
@@ -44,18 +58,26 @@ function formatAvailable(registry: ModelRegistry, needsVision: boolean): string 
 /**
  * Resolve a model spec from the orchestrator into a pi model + API key.
  *
- * Accepts "provider/model-id" (e.g. "google/gemini-3-flash-preview") or a bare
+ * Accepts "provider/model-id" (e.g. "anthropic/claude-opus-4-8") or a bare
  * model id, which is matched across all providers (ambiguous → error).
+ * `fallback` is used when no spec is given (e.g. the orchestrator's current
+ * model); if neither is set, the caller is told to choose a model explicitly.
  * When `needsVision` is set (an image is being attached), the model must
  * support image input.
  */
 export async function resolveExpertModel(
   spec: string | undefined,
   registry: ModelRegistry,
-  fallback: string,
+  fallback: string | undefined,
   needsVision: boolean,
 ): Promise<ResolvedModel> {
-  const requested = (spec ?? fallback).trim();
+  const requested = (spec ?? fallback ?? "").trim();
+  if (!requested) {
+    return {
+      ok: false,
+      error: `No model specified and no default is available. Pass a model as provider/model-id.\n${formatAvailable(registry, needsVision)}`,
+    };
+  }
 
   let model: Model<Api> | undefined;
   const slash = requested.indexOf("/");

@@ -5,10 +5,7 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { ExpertRegistry } from "./expert-registry.js";
 import type { SourceContext } from "./source-context.js";
 import { requireSourceDataDir } from "./source-context.js";
-import { runExpertTurn, DEFAULT_EXPERT_MODEL } from "./expert-turn.js";
-
-// Re-export so existing importers (task-batch, extensions) keep working.
-export { DEFAULT_EXPERT_MODEL } from "./expert-turn.js";
+import { runExpertTurn } from "./expert-turn.js";
 
 const taskParams = Type.Object({
   prompt: Type.String({ description: "What to ask the expert model." }),
@@ -29,9 +26,9 @@ const taskParams = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        `Model as provider/model-id (e.g. "google/gemini-3.1-pro-preview", "anthropic/claude-opus-4-8"). ` +
-        `Default: ${DEFAULT_EXPERT_MODEL} for new tasks, the session's current model on follow-ups. ` +
-        `An unknown model errors with the list of available models.`,
+        `Model as provider/model-id (e.g. "anthropic/claude-opus-4-8"). ` +
+        `Default: the orchestrator's current model for new tasks, the session's current model on follow-ups. ` +
+        `Any model pi has auth for works; an unknown model errors with the list of available models.`,
     })
   ),
   output_file: Type.Optional(
@@ -65,13 +62,14 @@ export function createTaskTool(
     label: "Task",
     description,
     parameters: taskParams,
-    async execute(_toolCallId, params, _signal, _onUpdate, extCtx) {
+    async execute(_toolCallId, params, signal, _onUpdate, extCtx) {
       const result = await runExpertTurn(registry, sourceCtx, pageExpertPrompt, extCtx, {
         taskId: params.task_id,
         prompt: params.prompt,
         model: params.model,
         pageId: params.page_id,
         bbox: params.bbox,
+        signal,
       });
 
       if (!result.ok) {

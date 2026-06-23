@@ -6,7 +6,7 @@ import type { ExpertRegistry } from "./expert-registry.js";
 import type { SourceContext } from "./source-context.js";
 import { requireSourceDataDir } from "./source-context.js";
 import type { ToolText } from "../utils/tool-loader.js";
-import { runExpertTurn, DEFAULT_EXPERT_MODEL, type ExpertTurnInput } from "./expert-turn.js";
+import { runExpertTurn, type ExpertTurnInput } from "./expert-turn.js";
 import { type Bbox } from "../utils/crop-image.js";
 
 interface ExpertEntry {
@@ -29,8 +29,9 @@ const taskBatchParams = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        `Model as provider/model-id (e.g. "google/gemini-3.1-pro-preview"). ` +
-        `Default: ${DEFAULT_EXPERT_MODEL}. An unknown model errors with the list of available models.`,
+        `Model as provider/model-id (e.g. "anthropic/claude-opus-4-8"). ` +
+        `Default: the orchestrator's current model. Any model pi has auth for works; ` +
+        `an unknown model errors with the list of available models.`,
     }),
   ),
   output_file: Type.Optional(
@@ -92,10 +93,10 @@ export function createTaskBatchTool(
       }
 
       const experts: ExpertEntry[] = [];
-      let resolvedModel = params.model ?? DEFAULT_EXPERT_MODEL;
+      let resolvedModel = params.model ?? "(orchestrator default)";
 
       const runOne = async (pageId: number): Promise<ExpertEntry> => {
-        const input: ExpertTurnInput = { prompt: params.prompt, model: params.model, pageId, bbox };
+        const input: ExpertTurnInput = { prompt: params.prompt, model: params.model, pageId, bbox, signal };
         const result = await runExpertTurn(registry, sourceCtx, pageExpertPrompt, extCtx, input);
         if (!result.ok) {
           return { page_id: pageId, status: "error", error: result.error };
