@@ -6,7 +6,8 @@ import type { ExpertRegistry } from "./expert-registry.js";
 import type { SourceContext } from "./source-context.js";
 import { requireSourceDataDir } from "./source-context.js";
 import type { ToolText } from "../utils/tool-loader.js";
-import { runExpertTurn, type ExpertTurnInput, type ExpertToolUse } from "./expert-turn.js";
+import { runExpertTurn, confirmExpertGrant, type ExpertTurnInput, type ExpertToolUse } from "./expert-turn.js";
+import type { ExpertCapability } from "./expert-tools.js";
 import { type Bbox } from "../utils/crop-image.js";
 
 interface ExpertEntry {
@@ -62,6 +63,15 @@ const taskBatchParams = Type.Object({
       { description: "Crop region in normalized coordinates (0–1). Applied to every page before sending to the model." }
     )
   ),
+  grant: Type.Optional(
+    Type.Array(Type.Union([Type.Literal("bash"), Type.Literal("write"), Type.Literal("edit")]), {
+      description:
+        'Elevate EVERY expert in this batch beyond read-only: "bash" (run shell commands), "write" ' +
+        '(create files), "edit" (modify files). REQUIRES the user\'s confirmation (asked once for the whole ' +
+        "batch) — experts are read-only by default so their work stays auditable; normally disabled for " +
+        "oversight and safety. Omit for normal read-only experts.",
+    }),
+  ),
 });
 
 export function createTaskBatchTool(
@@ -93,11 +103,28 @@ export function createTaskBatchTool(
         return { content: [{ type: "text", text: "No page IDs provided." }], details: {} };
       }
 
+      // Elevated capabilities are confirmed ONCE for the whole cohort, before any
+      // expert runs. Denial aborts the batch.
+      const grant: ExpertCapability[] = params.grant ?? [];
+      if (grant.length > 0 && !(await confirmExpertGrant(extCtx, grant, `all ${pageIds.length} experts in this batch`))) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `User declined to grant elevated access (${grant.join(", ")}); no experts were run. ` +
+                "Re-issue without `grant` to run read-only, or ask the user to approve.",
+            },
+          ],
+          details: {},
+        };
+      }
+
       const experts: ExpertEntry[] = [];
       let resolvedModel = params.model ?? "(orchestrator default)";
 
       const runOne = async (pageId: number): Promise<ExpertEntry> => {
-        const input: ExpertTurnInput = { prompt: params.prompt, model: params.model, pageId, bbox, signal };
+        const input: ExpertTurnInput = { prompt: params.prompt, model: params.model, pageId, bbox, signal, grantedCaps: grant };
         const result = await runExpertTurn(registry, sourceCtx, pageExpertPrompt, extCtx, input);
         if (!result.ok) {
           return { page_id: pageId, status: "error", error: result.error };

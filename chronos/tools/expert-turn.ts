@@ -16,10 +16,43 @@ import { requireSource } from "./source-context.js";
 import { resolveExpertModel } from "../utils/resolve-model.js";
 import { cropImageToBase64, type Bbox } from "../utils/crop-image.js";
 import { appendExpertTurn, type PersistedExpert, type PersistedStep } from "../utils/expert-store.js";
-import { EXPERT_TOOLS, executeExpertTool, rehydrateToolResult } from "./expert-tools.js";
+import {
+  buildExpertTools,
+  executeExpertTool,
+  rehydrateToolResult,
+  type ExpertCapability,
+} from "./expert-tools.js";
 
 // Bound the per-turn agentic loop so a confused expert can't spin on tool calls.
 const MAX_EXPERT_TOOL_CALLS = 8;
+
+const CAP_DESCRIPTION: Record<ExpertCapability, string> = {
+  bash: "run shell commands",
+  write: "create files",
+  edit: "modify files",
+};
+
+/**
+ * Ask the user to approve elevating an expert beyond read-only. Experts are
+ * read-only by default so their work stays auditable; bash/write/edit are off
+ * unless the orchestrator requests them AND the user approves here. Always
+ * prompts (it is the oversight gate). Returns true if approved; `scope`
+ * describes who gets the grant (e.g. "this expert", "all 12 experts in this batch").
+ */
+export async function confirmExpertGrant(
+  extCtx: ExtensionContext,
+  caps: ExpertCapability[],
+  scope: string,
+): Promise<boolean> {
+  if (caps.length === 0) return true;
+  const list = caps.map((c) => `${c} (${CAP_DESCRIPTION[c]})`).join(", ");
+  return extCtx.ui.confirm(
+    "Grant expert elevated access?",
+    `The agent wants to let ${scope} go beyond read-only — ${list} — in the workspace. ` +
+      `Expert subagents are read-only by default so their work stays auditable; this is normally ` +
+      `disabled for oversight and safety. Allow for this call?`,
+  );
+}
 
 export function modelSpec(m: { provider: string; id: string }): string {
   return `${m.provider}/${m.id}`;
@@ -50,6 +83,12 @@ export interface ExpertTurnInput {
   bbox?: Bbox;
   /** Abort the (multi-call) agentic loop when the user cancels. */
   signal?: AbortSignal;
+  /**
+   * Elevated capabilities the orchestrator granted this expert (bash/write/edit).
+   * Read-only tools are always available; these are added only when present, and
+   * the caller is responsible for getting the user's confirmation first.
+   */
+  grantedCaps?: ExpertCapability[];
 }
 
 /** One tool the expert invoked during a turn — surfaced to the UI for oversight. */
@@ -57,6 +96,8 @@ export interface ExpertToolUse {
   tool: string;
   pageId?: number;
   bbox?: Bbox;
+  /** Short label for non-page tools (command run, file path, search term). */
+  detail?: string;
   isError: boolean;
 }
 
@@ -158,9 +199,15 @@ export async function runExpertTurn(
   const steps: PersistedStep[] = [];
   let currentPageId: number | null = pageId;
   let toolCallCount = 0;
-  // Only offer the image-returning view tools to a model that can actually
-  // consume images; a text-only model just answers in text.
-  let toolsEnabled = resolved.model.input.includes("image");
+  // Read-only tools are always offered; the image tools only when the model can
+  // consume images; bash/write/edit only for capabilities the orchestrator
+  // granted (and the user approved upstream).
+  const granted = new Set<ExpertCapability>(input.grantedCaps ?? []);
+  const expertToolDefs = buildExpertTools({
+    vision: resolved.model.input.includes("image"),
+    granted: [...granted],
+  });
+  let toolsEnabled = expertToolDefs.length > 0;
   let totalCost = 0;
   let finalResponse;
 
@@ -173,7 +220,7 @@ export async function runExpertTurn(
       {
         systemPrompt: pageExpertPrompt,
         messages: [...session.messages, ...turnMessages],
-        tools: toolsEnabled ? EXPERT_TOOLS : undefined,
+        tools: toolsEnabled ? expertToolDefs : undefined,
       },
       { apiKey: resolved.apiKey, headers: resolved.headers, signal: input.signal },
     );
@@ -195,7 +242,12 @@ export async function runExpertTurn(
     steps.push({ kind: "assistant", message: response });
     for (const call of toolCalls) {
       toolCallCount++;
-      const outcome = await executeExpertTool(call, { sourceDir: turnSourceDir, currentPageId });
+      const outcome = await executeExpertTool(call, {
+        sourceDir: turnSourceDir,
+        currentPageId,
+        cwd: extCtx.cwd,
+        granted,
+      });
       turnMessages.push(outcome.message);
       steps.push({ kind: "toolResult", toolResult: outcome.persist });
       if (outcome.viewedPageId !== undefined) currentPageId = outcome.viewedPageId;
@@ -230,6 +282,7 @@ export async function runExpertTurn(
       tool: s.toolResult.toolName,
       pageId: s.toolResult.image?.pageId,
       bbox: s.toolResult.image?.bbox,
+      detail: s.toolResult.detail,
       isError: s.toolResult.isError,
     }));
 

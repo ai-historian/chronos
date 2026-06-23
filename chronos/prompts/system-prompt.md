@@ -86,9 +86,11 @@ the Data tab (as text). Always write outputs under `{{sourceDataDir}}/`.
   model in a persistent conversation. Without `task_id` it spawns a new expert and the result
   ends with a `task_id:` line; pass that id back to ask the same expert follow-up questions
   ("What did that abbreviation mean?") without re-sending earlier images. Multiple experts can
-  be active concurrently, each with its own history. The expert can self-direct with `view_region`
-  (zoom into a sub-region) and `view_page` (load another page from the source), so you needn't
-  predict the exact crop up front. `page_id` optionally attaches a page image
+  be active concurrently, each with its own history. The expert self-directs and is **read-only by
+  default** — `view_region` (zoom), `view_page` (load another page), `read_file`, `list_dir`, `grep`.
+  Pass `grant` (e.g. `["bash"]`, `["write","edit"]`) to also let it run commands / change files; this
+  asks the user for confirmation and is off by default for oversight, so only request it when the task
+  truly needs it. `page_id` optionally attaches a page image
   (on spawn or follow-up — requires an active source); omit it for text-only messages.
   `model` accepts any model pi has auth for as `provider/model-id`; it defaults to the
   orchestrator's current model. Pass `model` to use a different one for a hard page.

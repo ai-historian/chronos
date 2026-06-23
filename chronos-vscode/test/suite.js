@@ -195,11 +195,16 @@ exports.run = async function run() {
   // 9. Expert oversight (#11): the task/task_batch drawer surfaces the expert's
   //    own view_region/view_page calls as clickable viewer links.
   api.chronosTest.invoke("injectExpertTools");
-  await waitFor("expert drawer shows clickable tool-use links", async () => {
+  await waitFor("expert drawer shows tool-use oversight", async () => {
     const s = await dump();
-    return s?.chat?.expertOpen === "task-1" && s?.chat?.expertToolLinks === 2;
+    return (
+      s?.chat?.expertOpen === "task-1" &&
+      s?.chat?.expertToolLinks === 2 && // view_region + view_page → clickable links
+      s?.chat?.expertToolChips === 4 && // + grep + bash chips
+      s?.chat?.expertElevatedChips === 1 // bash flagged as elevated
+    );
   });
-  check("expert drawer surfaces tool-use viewer links", true);
+  check("expert drawer surfaces tool-use viewer links + flagged elevated actions", true);
 
   // Make sure the subprocess stayed alive throughout
   const after = api.getChronosStatus();

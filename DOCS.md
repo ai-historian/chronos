@@ -61,12 +61,23 @@ Each expert keeps its own conversation (addressed by the `task_id` the tool retu
 
 #### Expert self-direction
 
-Experts aren't limited to the single (optionally pre-cropped) image the orchestrator hands them — they run a bounded agentic loop and can pull in more detail on demand:
+Experts aren't limited to the single (optionally pre-cropped) image the orchestrator hands them — they run a bounded agentic loop (capped at 8 tool calls/turn). **By default they are read-only:**
 
-- **`view_region(bbox, [page_id])`** — crop a region of a page at full resolution (to read a dense table, marginal note, or faint ink). Omits `page_id` to zoom into the page currently in view.
-- **`view_page(page_id)`** — load another full page from the same source (e.g. to follow a record overleaf).
+- **`view_region(bbox, [page_id])`** — crop a region of a page at full resolution (dense table, marginal note, faint ink). Omits `page_id` to zoom into the page in view.
+- **`view_page(page_id)`** — load another full page from the same source.
+- **`read_file(path)`** / **`list_dir([path])`** / **`grep(pattern, [path])`** — read and search the workspace (schemas, memory, prior outputs). Scoped to the workspace root.
 
-The loop is capped (currently 8 tool calls per turn) so a confused expert can't spin. This means you don't have to predict the right crop up front — pass the page and let the expert zoom where it needs to.
+So you don't have to predict the right crop up front — pass the page and let the expert zoom and cross-reference where it needs to.
+
+#### Granting elevated capabilities (off by default)
+
+Experts **cannot run commands or change files** unless the orchestrator passes `grant` on the `task`/`task_batch` call:
+
+- `grant: ["bash"]` — `bash(command)` (runs in the workspace dir)
+- `grant: ["write"]` — `write_file(path, content)`
+- `grant: ["edit"]` — `edit_file(path, old_text, new_text)`
+
+This path is deliberately gated for oversight and safety: requesting a grant triggers a **user confirmation** before any expert runs (once per `task` call, or once for a whole `task_batch` cohort), and denial aborts the call. Granted file operations are confined to the workspace. Whatever the expert does — every region viewed, file read/written, command run — is surfaced in the expert drawer (the "examined" steps; region/page steps are clickable, elevated actions are flagged), so the work stays auditable. Leave `grant` off unless a task genuinely needs the expert to act on its own.
 
 ### Bounding box cropping
 
