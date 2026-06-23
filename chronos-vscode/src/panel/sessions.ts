@@ -56,15 +56,22 @@ function parseSessionFile(filePath: string): ChronosSessionInfo | undefined {
   let messageCount = 0;
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
-    if (line.startsWith('{"type":"message"')) {
-      messageCount++;
-      if (!firstUserMessage && line.includes('"role":"user"')) {
-        try {
-          const entry = JSON.parse(line);
-          firstUserMessage = firstTextOf(entry.message?.content)?.slice(0, 200);
-        } catch {
-          // skip malformed line
+    // Count only USER prompts — assistant/tool messages inflate the number on an
+    // agent that fans out many expert turns per prompt and tell the user nothing.
+    // The substring is just a cheap pre-filter (it avoids parsing the multi-MB
+    // base64 lines); confirm the real role so a tool/assistant line that merely
+    // embeds `"role":"user"` (e.g. an echoed sub-conversation) isn't miscounted.
+    if (line.startsWith('{"type":"message"') && line.includes('"role":"user"')) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.message?.role === "user") {
+          messageCount++;
+          if (!firstUserMessage) {
+            firstUserMessage = firstTextOf(entry.message?.content)?.slice(0, 200);
+          }
         }
+      } catch {
+        // skip malformed line
       }
     } else if (line.startsWith('{"type":"session_info"')) {
       try {
@@ -78,14 +85,37 @@ function parseSessionFile(filePath: string): ChronosSessionInfo | undefined {
 
   const info: ChronosSessionInfo = {
     path: filePath,
+    // Sidecar-generated name is overlaid in scanDir (it can change after this
+    // file's mtime/size last did, so it must stay out of the per-file cache).
     name: name ?? firstUserMessage?.slice(0, 80) ?? "(empty session)",
     timestamp: Date.parse(header.timestamp) || stat.mtimeMs,
     messageCount,
     firstUserMessage,
     sizeBytes: stat.size,
+    sessionId: typeof header.id === "string" ? header.id : undefined,
+    userName: name,
   };
   sessionInfoCache.set(filePath, { mtime: stat.mtimeMs, size: stat.size, info });
   return info;
+}
+
+// Auto-generated session names written by the pi-package (.chronos/session-names.json),
+// keyed by pi session id. Read fresh per listing — the file is tiny and updates
+// independently of the session JSONL, so it can't be folded into the file cache.
+// Each value is `{ name, fromPrompts }` (a bare string is also accepted for
+// forward/backward tolerance).
+function readGeneratedNames(workspaceDir: string): Record<string, { name?: string } | string> {
+  try {
+    const parsed = JSON.parse(readFileSync(join(workspaceDir, ".chronos", "session-names.json"), "utf-8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function generatedName(entry: { name?: string } | string | undefined): string | undefined {
+  if (typeof entry === "string") return entry || undefined;
+  return entry?.name || undefined;
 }
 
 // pi's default per-project session location: ~/.pi/agent/sessions/--<cwd>--
@@ -96,7 +126,11 @@ function defaultPiSessionDir(workspaceDir: string): string {
   return join(homedir(), ".pi", "agent", "sessions", encoded);
 }
 
-function scanDir(dir: string, sessions: Map<string, ChronosSessionInfo>): void {
+function scanDir(
+  dir: string,
+  sessions: Map<string, ChronosSessionInfo>,
+  generatedNames: Record<string, { name?: string } | string>,
+): void {
   let files: string[];
   try {
     files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
@@ -104,10 +138,16 @@ function scanDir(dir: string, sessions: Map<string, ChronosSessionInfo>): void {
     return;
   }
   for (const file of files) {
-    const info = parseSessionFile(join(dir, file));
+    let info = parseSessionFile(join(dir, file));
     // Key by file basename (timestamp_sessionId) so the same session never
     // shows twice if both locations somehow contain it
-    if (info && !sessions.has(file)) sessions.set(file, info);
+    if (!info || sessions.has(file)) continue;
+    // Overlay the auto-generated name when the user hasn't set one explicitly.
+    if (!info.userName && info.sessionId) {
+      const gen = generatedName(generatedNames[info.sessionId]);
+      if (gen) info = { ...info, name: gen };
+    }
+    sessions.set(file, info);
   }
 }
 
@@ -167,7 +207,8 @@ export function readSessionMessages(sessionFile: string): any[] | undefined {
 
 export function listSessions(workspaceDir: string): ChronosSessionInfo[] {
   const sessions = new Map<string, ChronosSessionInfo>();
-  scanDir(join(workspaceDir, "sessions"), sessions);
-  scanDir(defaultPiSessionDir(workspaceDir), sessions);
+  const generatedNames = readGeneratedNames(workspaceDir);
+  scanDir(join(workspaceDir, "sessions"), sessions, generatedNames);
+  scanDir(defaultPiSessionDir(workspaceDir), sessions, generatedNames);
   return [...sessions.values()].sort((a, b) => b.timestamp - a.timestamp);
 }
