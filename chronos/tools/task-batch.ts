@@ -6,7 +6,7 @@ import type { ExpertRegistry } from "./expert-registry.js";
 import type { SourceContext } from "./source-context.js";
 import { requireSourceDataDir } from "./source-context.js";
 import type { ToolText } from "../utils/tool-loader.js";
-import { runExpertTurn, type ExpertTurnInput } from "./expert-turn.js";
+import { runExpertTurn, type ExpertTurnInput, type ExpertToolUse } from "./expert-turn.js";
 import { type Bbox } from "../utils/crop-image.js";
 
 interface ExpertEntry {
@@ -17,6 +17,7 @@ interface ExpertEntry {
   file?: string;
   error?: string;
   cost?: number;
+  toolUses?: ExpertToolUse[];
 }
 
 const taskBatchParams = Type.Object({
@@ -105,9 +106,9 @@ export function createTaskBatchTool(
         if (outputFileTemplate) {
           const filename = outputFileTemplate.replace("{page_id}", String(pageId).padStart(4, "0"));
           writeFileSync(join(outputDir, filename), result.text || "(empty response)", "utf-8");
-          return { taskId: result.taskId, page_id: pageId, status: "ok", file: filename, cost: result.cost };
+          return { taskId: result.taskId, page_id: pageId, status: "ok", file: filename, cost: result.cost, toolUses: result.toolUses };
         }
-        return { taskId: result.taskId, page_id: pageId, status: "ok", response: result.text || "(empty response)", cost: result.cost };
+        return { taskId: result.taskId, page_id: pageId, status: "ok", response: result.text || "(empty response)", cost: result.cost, toolUses: result.toolUses };
       };
 
       // Concurrency-limited worker pool.

@@ -52,8 +52,25 @@ export interface ExpertTurnInput {
   signal?: AbortSignal;
 }
 
+/** One tool the expert invoked during a turn — surfaced to the UI for oversight. */
+export interface ExpertToolUse {
+  tool: string;
+  pageId?: number;
+  bbox?: Bbox;
+  isError: boolean;
+}
+
 export type ExpertTurnResult =
-  | { ok: true; taskId: string; model: string; text: string; cost: number | undefined; pageId: number | null }
+  | {
+      ok: true;
+      taskId: string;
+      model: string;
+      text: string;
+      cost: number | undefined;
+      pageId: number | null;
+      /** view_region/view_page calls the expert made this turn (in order). */
+      toolUses: ExpertToolUse[];
+    }
   | { ok: false; error: string; taskId?: string };
 
 function isToolCall(c: { type: string }): c is ToolCall {
@@ -206,6 +223,16 @@ export async function runExpertTurn(
     response: finalResponse,
   });
 
+  // Surface the expert's tool calls (page/region it pulled in) for UI oversight.
+  const toolUses: ExpertToolUse[] = steps
+    .filter((s): s is Extract<PersistedStep, { kind: "toolResult" }> => s.kind === "toolResult")
+    .map((s) => ({
+      tool: s.toolResult.toolName,
+      pageId: s.toolResult.image?.pageId,
+      bbox: s.toolResult.image?.bbox,
+      isError: s.toolResult.isError,
+    }));
+
   return {
     ok: true,
     taskId: taskId!,
@@ -213,6 +240,7 @@ export async function runExpertTurn(
     text,
     cost: totalCost > 0 ? totalCost : undefined,
     pageId,
+    toolUses,
   };
 }
 
