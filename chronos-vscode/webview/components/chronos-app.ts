@@ -262,6 +262,9 @@ export class ChronosApp extends LitElement {
       case "newSession":
         this.postMessage({ type: "newSession" });
         break;
+      case "injectExpertTools":
+        this.chat?.testInjectExpertWithTools();
+        break;
       case "selectDataFile":
         if (arg) this.dataViewer?.testSelect(arg);
         break;

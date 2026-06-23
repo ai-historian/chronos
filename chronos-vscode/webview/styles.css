@@ -2131,6 +2131,42 @@ a.expert-tag.is-page:hover {
   font-size: 12px;
 }
 
+/* What the expert pulled in (view_region/view_page) — clickable viewer links. */
+.expert-turn-tools {
+  align-self: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  max-width: 94%;
+  padding-left: 13px;
+  margin: 1px 0;
+}
+
+.expert-turn-tools-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ch-muted);
+}
+
+.expert-tool {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: var(--ch-radius-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+span.expert-tool {
+  color: var(--ch-muted);
+  background: var(--ch-surface-2);
+}
+
+.expert-tool.is-error {
+  color: var(--ch-error);
+  text-decoration: line-through;
+}
+
 .expert-turn-a {
   align-self: flex-start;
   max-width: 94%;

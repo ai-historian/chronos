@@ -80,7 +80,7 @@ export function createTaskTool(
         };
       }
 
-      const { taskId, model, text, cost, pageId } = result;
+      const { taskId, model, text, cost, pageId, toolUses } = result;
       const bbox = params.bbox ?? null;
       const costStr = cost !== undefined ? ` [cost: $${cost.toFixed(4)}]` : "";
 
@@ -99,13 +99,13 @@ export function createTaskTool(
         writeFileSync(outPath, text || "(empty response)", "utf-8");
         return {
           content: [{ type: "text", text: `${viewLink}→ ${params.output_file}${trailer}` }],
-          details: { model, taskId, pageId, bbox, cost: costStr, path: outPath },
+          details: { model, taskId, pageId, bbox, cost: costStr, path: outPath, toolUses },
         };
       }
 
       return {
         content: [{ type: "text", text: `${viewLink}${text || "(empty response)"}${trailer}` }],
-        details: { model, taskId, pageId, bbox, cost: costStr },
+        details: { model, taskId, pageId, bbox, cost: costStr, toolUses },
       };
     },
   };

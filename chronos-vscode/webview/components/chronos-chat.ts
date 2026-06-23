@@ -47,6 +47,15 @@ type RenderBlock =
   // batch subagent call (`task_batch`) — one card listing the N experts it spawned
   | { kind: "expertBatch"; key: string; item: ToolItem };
 
+// A tool the expert invoked during a turn (view_region / view_page), surfaced
+// from the task/task_batch result so the drawer can show what it inspected.
+interface ExpertToolUse {
+  tool: string;
+  pageId?: number;
+  bbox?: { x: number; y: number; w: number; h: number };
+  isError: boolean;
+}
+
 // One reconstructed turn of an expert conversation, gathered from `task` calls
 // and/or the first turn embedded in a `task_batch` result.
 interface ExpertTurn {
@@ -56,6 +65,7 @@ interface ExpertTurn {
   reply: string;
   running: boolean;
   isError: boolean;
+  toolUses?: ExpertToolUse[];
 }
 
 const SOURCE_SELECTED_RE = /^Source selected: "([^"]+)"/;
@@ -139,6 +149,7 @@ interface BatchExpertEntry {
   response?: string;
   file?: string;
   error?: string;
+  toolUses?: ExpertToolUse[];
 }
 
 /** Read a task_batch tool result's details (empty until the call completes). */
@@ -473,6 +484,8 @@ export class ChronosChat extends LitElement {
     toolNames: string[];
     lastAssistant: string;
     running: boolean;
+    expertOpen: string | null;
+    expertToolLinks: number;
   } {
     const assistant = [...this.items].reverse().find((i) => i.kind === "assistant") as
       | { kind: "assistant"; message: AssistantMessage }
@@ -483,7 +496,38 @@ export class ChronosChat extends LitElement {
       toolNames: this.items.filter((i) => i.kind === "tool").map((i) => (i as ToolItem).toolName),
       lastAssistant: assistant ? messageText(assistant.message.content) : "",
       running: this.running,
+      expertOpen: this.openExpert,
+      // Clickable viewer links for the expert's own tool calls, in the open drawer.
+      expertToolLinks: this.querySelectorAll(".expert-turn-tools a.view-link").length,
     };
+  }
+
+  // Test seam: inject a synthetic expert (task) call whose result carries
+  // tool-use oversight data, and open its drawer — exercises the expert
+  // tool-link rendering end-to-end without a live model.
+  testInjectExpertWithTools(): void {
+    this.items = [
+      {
+        kind: "tool",
+        toolCallId: "tc-expert",
+        toolName: "task",
+        args: { prompt: "Read the marriage entries on this page.", page_id: 42 },
+        result: {
+          content: [{ type: "text", text: "Found 3 entries.\ntask_id: task-1" }],
+          details: {
+            taskId: "task-1",
+            model: "anthropic/claude-opus-4-8",
+            toolUses: [
+              { tool: "view_region", pageId: 42, bbox: { x: 0.1, y: 0.3, w: 0.8, h: 0.1 }, isError: false },
+              { tool: "view_page", pageId: 43, isError: false },
+            ],
+          },
+        },
+        isError: false,
+        running: false,
+      },
+    ];
+    this.openExpert = "task-1";
   }
 
   private sendPrompt(): void {
@@ -831,6 +875,7 @@ export class ChronosChat extends LitElement {
           reply: taskReplyText(item).replace(LEADING_VIEW_LINKS_RE, ""),
           running: !!item.running,
           isError: !!item.isError,
+          toolUses: (item.result as any)?.details?.toolUses,
         });
       } else if (item.toolName === "task_batch") {
         const { prompt, bbox, experts } = batchDetails(item);
@@ -843,6 +888,7 @@ export class ChronosChat extends LitElement {
             reply: entry.response ?? (entry.file ? `→ ${entry.file}` : entry.error ?? ""),
             running: false,
             isError: entry.status === "error",
+            toolUses: entry.toolUses,
           });
         }
       }
@@ -971,10 +1017,34 @@ export class ChronosChat extends LitElement {
           : nothing}
         <span>${turn.prompt}</span>
       </div>
+      ${turn.toolUses && turn.toolUses.length
+        ? html`<div class="expert-turn-tools">
+            <span class="expert-turn-tools-label">examined</span>
+            ${turn.toolUses.map((u) => this.renderExpertToolUse(u))}
+          </div>`
+        : nothing}
       ${turn.running
         ? html`<div class="expert-turn-a is-pending"><span class="spinner"></span> thinking…</div>`
         : html`<div class="expert-turn-a md ${turn.isError ? "is-error" : ""}">${unsafeHTML(renderMarkdown(reply || "*(empty response)*"))}</div>`}
     `;
+  }
+
+  // One expert tool call (view_region/view_page) as a clickable viewer link, so
+  // the historian can jump to exactly the page/region the expert pulled in.
+  private renderExpertToolUse(u: ExpertToolUse): TemplateResult {
+    const label = u.tool === "view_region" ? "⛶ region" : u.tool === "view_page" ? "page" : u.tool.replace(/_/g, " ");
+    if (u.pageId == null) {
+      return html`<span class="expert-tool ${u.isError ? "is-error" : ""}">${label}</span>`;
+    }
+    const bboxAttr = u.bbox ? `${u.bbox.x},${u.bbox.y},${u.bbox.w},${u.bbox.h}` : undefined;
+    return html`<a
+      class="view-link expert-tool ${u.isError ? "is-error" : ""} ${bboxAttr ? "view-link-has-sel" : ""}"
+      href="#"
+      title=${u.isError ? "This lookup failed" : `Jump to p.${u.pageId}`}
+      data-page=${u.pageId}
+      data-bbox=${bboxAttr ?? nothing}
+      >${label} p.${u.pageId}</a
+    >`;
   }
 
   private renderExpertBatchCard(item: ToolItem): TemplateResult {

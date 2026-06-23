@@ -192,6 +192,15 @@ exports.run = async function run() {
   });
   check("new session clears the viewer + source dropdown", true);
 
+  // 9. Expert oversight (#11): the task/task_batch drawer surfaces the expert's
+  //    own view_region/view_page calls as clickable viewer links.
+  api.chronosTest.invoke("injectExpertTools");
+  await waitFor("expert drawer shows clickable tool-use links", async () => {
+    const s = await dump();
+    return s?.chat?.expertOpen === "task-1" && s?.chat?.expertToolLinks === 2;
+  });
+  check("expert drawer surfaces tool-use viewer links", true);
+
   // Make sure the subprocess stayed alive throughout
   const after = api.getChronosStatus();
   check("pi subprocess still alive", after?.agentStatus === "ready", after?.lastError);
