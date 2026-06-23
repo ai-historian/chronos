@@ -1,7 +1,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
-import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ExpertRegistry } from "./expert-registry.js";
 import type { SourceContext } from "./source-context.js";
 import { requireSourceDataDir } from "./source-context.js";

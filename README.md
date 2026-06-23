@@ -29,7 +29,7 @@ If you'd rather install everything by hand:
 
 ```bash
 # 1. Install the pi agent globally
-npm install -g @mariozechner/pi-coding-agent
+npm install -g @earendil-works/pi-coding-agent
 
 # 2. Register the Chronos pi-package
 pi install https://github.com/ai-historian/chronos

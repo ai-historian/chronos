@@ -16,7 +16,7 @@ import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { resolve, relative, isAbsolute, dirname, join } from "node:path";
 import { Type } from "@sinclair/typebox";
-import type { ImageContent, TextContent, Tool, ToolCall, ToolResultMessage } from "@mariozechner/pi-ai";
+import type { ImageContent, TextContent, Tool, ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { Bbox } from "../utils/crop-image.js";
 import { pageImageContent } from "./expert-turn.js";
 
