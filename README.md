@@ -10,7 +10,7 @@ An AI agent that collaborates with historians to extract structured datasets fro
 
 - [VS Code](https://code.visualstudio.com/) (v1.110+)
 - [Node.js](https://nodejs.org/) (v18+) — required by the underlying `pi` agent the extension installs on first run
-- A [Gemini API key](https://aistudio.google.com/apikey) for the vision model
+- An API key for an AI provider with a vision-capable model (Anthropic, Google, OpenAI, …). You connect it from inside the panel — see [Start the agent](#3-start-the-agent).
 
 ## Installation
 
@@ -46,7 +46,7 @@ The `.vsix` is published on [GitHub Releases](https://github.com/ai-historian/ch
 
 ### 1. Initialize a workspace
 
-Open VS Code in an empty folder. Press `Ctrl+Shift+P` and run **Chronos: Init Workspace**. This creates the workspace structure and prompts for your Gemini API key.
+Open VS Code in an empty folder. Press `Ctrl+Shift+P` and run **Chronos: Init Workspace**. This creates the workspace structure. (You connect an AI provider in step 3 — no key is needed yet.)
 
 ### 2. Import sources
 
@@ -60,19 +60,24 @@ Converting a large PDF can take a few minutes. Imports are crash-safe: a source 
 
 Press `Ctrl+Shift+P` and run **Chronos: Start Agent Session**. The Chronos panel opens — a page viewer on the left and a chat on the right.
 
-On first startup, type `/login` in the chat to log into your AI provider account (e.g. Anthropic, Google). Without this, no models will be available.
+On first startup no AI models are available until you connect a provider. Click **Log in** in the panel header (or run **Chronos: Connect AI Provider**), pick your provider, and paste its API key. Chronos saves it to `.chronos/.env` and reconnects automatically. You can switch or add providers the same way at any time.
 
 Pick a source from the header dropdown (or type `/select-source`) and begin working.
 
 ## Configuration
 
-### Environment variables
+### AI provider & models
 
-Set in `.chronos/.env`:
+Connect a provider with the **Log in** button (above); it stores the key in `.chronos/.env`. You can also edit that file directly — pi reads the standard per-provider variables:
 
 ```
-GEMINI_API_KEY=your-key-here
+ANTHROPIC_API_KEY=...      # Claude
+GEMINI_API_KEY=...         # Google Gemini
+OPENAI_API_KEY=...         # OpenAI
+# OPENROUTER_API_KEY, XAI_API_KEY, MISTRAL_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY, …
 ```
+
+The page-analysis tools (`task` / `task_batch`) default to the model selected in the header, but accept any vision-capable model pi has auth for via a `model: "provider/model-id"` argument. Chronos is provider-agnostic — choose what fits your budget and accuracy needs. As a starting point, a fast/cheap vision model (e.g. `google/gemini-3-flash-preview`) works well for routine pages, and a stronger model (e.g. `google/gemini-3.1-pro-preview` or `anthropic/claude-opus-4-8`) helps on dense or damaged pages.
 
 ### pi options
 
@@ -80,7 +85,7 @@ pi supports many options natively. Common ones:
 
 ```bash
 # Use a specific model
-pi --model gemini-2.5-pro
+pi --model anthropic/claude-opus-4-8
 
 # Continue previous session
 pi -c
