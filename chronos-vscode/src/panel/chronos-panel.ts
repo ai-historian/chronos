@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { execSync } from "node:child_process";
+import { resolvePiBin } from "../pi-env";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, basename, isAbsolute } from "node:path";
@@ -249,33 +249,9 @@ export class ChronosPanel {
 
   // ── agent lifecycle ───────────────────────────────────────────────────────
 
-  private resolvePiBin(): string {
-    const configured = vscode.workspace.getConfiguration("chronos").get<string>("piPath");
-    if (configured?.trim()) return configured.trim();
-    // GUI-launched VS Code doesn't source shell rc files, so PATH may miss the
-    // npm global bin dir. Probe PATH first, then common install locations.
-    try {
-      execSync(process.platform === "win32" ? "where pi" : "command -v pi", { stdio: "ignore" });
-      return "pi";
-    } catch {
-      const home = homedir();
-      const candidates = [
-        join(home, ".npm-global", "bin", "pi"),
-        join(home, ".local", "bin", "pi"),
-        join(home, ".npm", "bin", "pi"),
-        "/usr/local/bin/pi",
-        "/opt/homebrew/bin/pi",
-      ];
-      for (const candidate of candidates) {
-        if (existsSync(candidate)) return candidate;
-      }
-      return "pi"; // let spawn fail with a clear ENOENT
-    }
-  }
-
   private async startAgent(): Promise<void> {
     const rpc = new PiRpcSession({
-      piBin: this.resolvePiBin(),
+      piBin: resolvePiBin(),
       workspaceDir: this.workspaceDir,
       env: this.agentEnv,
     });

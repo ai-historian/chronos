@@ -17,7 +17,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:chronos.startSession"
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -29,6 +29,10 @@
       {
         "command": "chronos.showPage",
         "title": "Chronos: Show Page"
+      },
+      {
+        "command": "chronos.setup",
+        "title": "Chronos: Install Dependencies (pi + agent)"
       },
       {
         "command": "chronos.init",
@@ -54,9 +58,73 @@
           "type": "string",
           "default": "",
           "description": "Path to the pi binary. Leave empty to use \"pi\" from PATH."
+        },
+        "chronos.piPackageSource": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "**Dev override.** Source the setup flow installs the Chronos pi-package from. Accepts a local path (`/abs/path/to/chronos/chronos`), a git URL, or a git URL with a branch/tag using the `@` form (`https://github.com/ai-historian/chronos@my-branch`). Leave empty to use the GitHub release pinned to this extension's version."
+        },
+        "chronos.piNpmPackage": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "**Dev override.** npm package the setup flow installs for the `pi` CLI when pi isn't found. Leave empty for the default `@earendil-works/pi-coding-agent` (the maintained package). Set to override it — e.g. a fork or a version-pinned tag like `@earendil-works/pi-coding-agent@0.79.10`."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "chronos.gettingStarted",
+        "title": "Get Started with Chronos",
+        "description": "Install the agent, scaffold a workspace, connect an AI provider, and start digitizing historical sources.",
+        "steps": [
+          {
+            "id": "chronos.setup",
+            "title": "Install dependencies",
+            "description": "Chronos runs on the `pi` agent CLI plus the Chronos pi-package — installed once per machine.\n[Install dependencies](command:chronos.setup)",
+            "media": {
+              "markdown": "walkthroughs/setup.md"
+            },
+            "completionEvents": [
+              "onContext:chronos.dependenciesInstalled"
+            ]
+          },
+          {
+            "id": "chronos.init",
+            "title": "Initialize a workspace",
+            "description": "Open a folder, then scaffold it into a Chronos workspace (sources/, data/, memory/, …).\n[Init workspace](command:chronos.init)",
+            "media": {
+              "markdown": "walkthroughs/init.md"
+            },
+            "completionEvents": [
+              "onContext:chronos.workspaceInitialized"
+            ]
+          },
+          {
+            "id": "chronos.startSession",
+            "title": "Start an agent session",
+            "description": "Open the Chronos panel — page viewer plus chat — to begin working.\n[Start session](command:chronos.startSession)",
+            "media": {
+              "markdown": "walkthroughs/start.md"
+            },
+            "completionEvents": [
+              "onCommand:chronos.startSession"
+            ]
+          },
+          {
+            "id": "chronos.login",
+            "title": "Connect an AI provider",
+            "description": "Store an API key (Anthropic, Google, OpenAI, …) the agent will use. Use the **Log in** button in the panel header, or run the command.\n[Connect provider](command:chronos.login)",
+            "media": {
+              "markdown": "walkthroughs/login.md"
+            },
+            "completionEvents": [
+              "onContext:chronos.providerConnected",
+              "onCommand:chronos.login"
+            ]
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run build",

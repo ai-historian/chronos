@@ -2,22 +2,27 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import type { AgentToExtensionMessage } from "./protocol";
 
 export class HttpServer {
-  private server: Server;
+  private server: Server | null = null;
   private handler: ((msg: AgentToExtensionMessage) => void) | null = null;
+  private startPromise: Promise<void> | null = null;
   port = 0;
-  readonly ready: Promise<void>;
 
-  constructor() {
+  // Bind the loopback server lazily — only when the first agent session starts —
+  // so merely activating the extension (e.g. on startup, to drive the Getting
+  // Started walkthrough) opens no port. Idempotent: repeated calls share one server.
+  start(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
     this.server = createServer((req, res) => this.handleRequest(req, res));
-    this.ready = new Promise((resolve) => {
-      this.server.listen(0, "127.0.0.1", () => {
-        const addr = this.server.address();
+    this.startPromise = new Promise((resolve) => {
+      this.server!.listen(0, "127.0.0.1", () => {
+        const addr = this.server!.address();
         if (addr && typeof addr === "object") {
           this.port = addr.port;
         }
         resolve();
       });
     });
+    return this.startPromise;
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
@@ -47,6 +52,6 @@ export class HttpServer {
   }
 
   dispose(): void {
-    this.server.close();
+    this.server?.close();
   }
 }
