@@ -8,6 +8,10 @@ chronos-vscode/.vscode-test/
 *.tgz
 *.vsix
 *.html
+# MkDocs build output + the docs virtualenv (sources live in docs/*.md, tracked)
+/site/
+/.venv-docs/
+.shots/
 paper.md
 win-vm.md
 soduco/

@@ -103,7 +103,20 @@ Run `pi --help` for the full list.
 
 ## Documentation
 
-See [DOCS.md](DOCS.md) for technical details on workspace structure, tools, skills, memory, and the VS Code extension.
+A full documentation **website** (MkDocs + [Material](https://squidfunk.github.io/mkdocs-material/))
+lives in [`docs/`](docs/) — installation, a guided first extraction, the panel tour, the Data tab, an
+interactive bounding-box explainer, experts, skills, memory, and the architecture.
+
+```bash
+pip install -r requirements-docs.txt
+mkdocs serve     # preview at http://localhost:8000
+mkdocs build     # static site in site/
+```
+
+It publishes to GitHub Pages automatically via [`.github/workflows/docs.yml`](.github/workflows/docs.yml)
+(or run `mkdocs gh-deploy`).
+
+See [DOCS.md](DOCS.md) for the condensed technical reference on workspace structure, tools, skills, memory, and the VS Code extension.
 
 ## Citation
 

@@ -1,0 +1,101 @@
+site_name: Chronos
+site_description: An AI agent that turns scanned primary sources into structured, fully-cited datasets, inside VS Code.
+site_author: AI-Historian
+site_url: https://ai-historian.github.io/chronos/
+repo_url: https://github.com/ai-historian/chronos
+repo_name: ai-historian/chronos
+edit_uri: edit/master/docs/
+copyright: Chronos — The AI Historian
+docs_dir: docs
+site_dir: site
+use_directory_urls: false
+
+theme:
+  name: material
+  language: en
+  logo: assets/img/icon.png
+  favicon: assets/img/logo.png
+  font: false
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: installation.md
+      - Your first extraction: getting-started.md
+  - Working with sources:
+      - The Chronos panel: interface.md
+      - Sources & the page viewer: sources.md
+      - The Data tab: data-viewer.md
+      - Provenance & bounding boxes: provenance.md
+  - Going further:
+      - Experts & analysis tools: experts.md
+      - Skills & memory: skills-memory.md
+      - How it works: architecture.md
+      - Reference: reference.md
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      title: On this page
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_css:
+  - stylesheets/extra.css
+extra_javascript:
+  - javascripts/extra.js
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ai-historian/chronos
+    - icon: fontawesome/solid/book
+      link: https://ai-historian.com/research/chronos/
+  generator: false

@@ -1,0 +1,218 @@
+/* ============================================================================
+   Chronos docs — Material theme overrides + custom widgets
+   Bronze (#b9772d) is reserved for provenance/brand, matching the product's
+   own --ch-brand discipline. Brand face: the bundled Schibsted Grotesk.
+   ============================================================================ */
+
+/* ---- brand variable font (same files the extension ships) ----------------- */
+@font-face {
+  font-family: "Schibsted Grotesk";
+  font-style: normal; font-weight: 400 700; font-display: swap;
+  src: url("../assets/fonts/schibsted-grotesk-var.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+2074, U+20AC,
+    U+2122, U+2212, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Schibsted Grotesk";
+  font-style: normal; font-weight: 400 700; font-display: swap;
+  src: url("../assets/fonts/schibsted-grotesk-var-latinext.woff2") format("woff2");
+  unicode-range: U+0100-024F, U+1E00-1EFF, U+2020, U+20A0-20CF, U+2C60-2C7F;
+}
+@font-face {
+  font-family: "Schibsted Grotesk";
+  font-style: italic; font-weight: 400 700; font-display: swap;
+  src: url("../assets/fonts/schibsted-grotesk-var-italic.woff2") format("woff2");
+}
+
+/* ---- theme tokens --------------------------------------------------------- */
+:root {
+  --md-text-font: "Schibsted Grotesk";
+  --md-code-font: "SFMono-Regular";
+
+  --ui: "Schibsted Grotesk", system-ui, sans-serif;
+  --mono: var(--md-code-font-family, ui-monospace, "SF Mono", Menlo, monospace);
+
+  --bronze: #b9772d;
+  --bronze-ink: #8a5316;
+  --bronze-soft: rgba(185, 119, 45, 0.13);
+  --bronze-soft-2: rgba(185, 119, 45, 0.22);
+  --bronze-line: rgba(185, 119, 45, 0.42);
+  --good: #3f7d4f;
+  --warn: #9a6b16;
+  --bad: #a4392d;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow-1: 0 1px 2px rgba(40, 28, 12, 0.07), 0 6px 22px rgba(40, 28, 12, 0.07);
+  --shadow-2: 0 2px 8px rgba(40, 28, 12, 0.1), 0 22px 60px rgba(40, 28, 12, 0.16);
+
+  /* adaptive surfaces — follow Material's scheme */
+  --card-bg: var(--md-default-bg-color);
+  --card-line: var(--md-default-fg-color--lightest);
+  --fg-2: var(--md-default-fg-color--light);
+  --fg-3: var(--md-default-fg-color--lighter);
+}
+
+/* light scheme: bronze brand + a faint warm paper */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #9a5f22;
+  --md-primary-fg-color--light: #b9772d;
+  --md-primary-fg-color--dark: #7d4c18;
+  --md-primary-bg-color: #fff7ec;
+  --md-accent-fg-color: #a5661f;
+  --md-typeset-a-color: #8a5316;
+  --md-default-bg-color: #f7f2e9;
+  --md-default-fg-color: #211a12;
+  --md-default-fg-color--light: #5a4e3d;
+  --md-default-fg-color--lighter: #897b65;
+  --md-default-fg-color--lightest: rgba(33, 26, 18, 0.10);
+  --md-code-bg-color: #efe7d7;
+  --md-code-fg-color: #51493b;
+}
+
+/* dark scheme: keep bronze accents on Material slate */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #1d1916;
+  --md-primary-bg-color: #ead9bf;
+  --md-accent-fg-color: #d9a55f;
+  --md-typeset-a-color: #e0b277;
+  --md-hue: 32;
+  --md-default-bg-color: hsl(32, 14%, 12%);
+}
+
+/* faint paper grain in light mode (echoes the product's textured stage) */
+[data-md-color-scheme="default"] .md-main {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+
+.md-header__title { font-weight: 650; }
+.md-typeset h1, .md-typeset h2, .md-typeset h3 { letter-spacing: -0.018em; font-weight: 680; }
+.md-typeset h1 { font-weight: 700; }
+
+/* ---- lead paragraph ------------------------------------------------------- */
+.md-typeset .lead {
+  font-size: 1.2rem;
+  line-height: 1.55;
+  color: var(--fg-2);
+  font-weight: 400;
+}
+
+/* ---- citation chip (matches the product) ---------------------------------- */
+.md-typeset .chip {
+  display: inline-block;
+  font-family: var(--ui);
+  font-size: 0.78em;
+  font-weight: 600;
+  color: var(--bronze-ink);
+  background: var(--bronze-soft);
+  border: 1px solid var(--bronze-line);
+  border-radius: 5px;
+  padding: 0 6px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+[data-md-color-scheme="slate"] .md-typeset .chip { color: #e0b277; }
+.md-typeset .chip.sel::after { content: " ◳"; opacity: 0.8; }
+
+/* ---- feature grid --------------------------------------------------------- */
+.md-typeset .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin: 1.2em 0;
+}
+.md-typeset .feature {
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  padding: 16px 18px 18px;
+  background: var(--card-bg);
+  box-shadow: var(--shadow-1);
+}
+.md-typeset .feature .fi {
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border-radius: 9px;
+  background: var(--bronze-soft);
+  color: var(--bronze-ink);
+  font-size: 18px;
+  margin-bottom: 11px;
+}
+[data-md-color-scheme="slate"] .md-typeset .feature .fi { color: #e0b277; }
+.md-typeset .feature h3 { margin: 0 0 0.25em; font-size: 1rem; }
+.md-typeset .feature p { margin: 0; font-size: 0.78rem; color: var(--fg-2); }
+
+/* ---- numbered steps ------------------------------------------------------- */
+.md-typeset .steps { list-style: none; counter-reset: step; margin: 1.2em 0; padding: 0; }
+.md-typeset .steps > li {
+  position: relative; counter-increment: step;
+  padding: 0 0 1.3em 50px;
+  border-left: 1px solid var(--card-line);
+  margin-left: 16px;
+}
+.md-typeset .steps > li:last-child { border-left-color: transparent; padding-bottom: 0; }
+.md-typeset .steps > li::before {
+  content: counter(step);
+  position: absolute; left: -16px; top: -3px;
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: var(--md-default-bg-color);
+  border: 1.5px solid var(--bronze);
+  color: var(--bronze-ink);
+  font-family: var(--mono); font-size: 13px; font-weight: 600;
+}
+[data-md-color-scheme="slate"] .md-typeset .steps > li::before { color: #e0b277; }
+.md-typeset .steps > li strong:first-child { display:block; font-size: 1.02rem; margin-bottom: 0.2em; }
+
+/* ---- figure captions ------------------------------------------------------ */
+.md-typeset figure { margin: 1.6em auto; }
+.md-typeset figure img { border-radius: var(--radius); box-shadow: var(--shadow-2); }
+.md-typeset figcaption { font-size: 0.76rem; color: var(--fg-3); font-style: italic; }
+.md-typeset figcaption b { font-style: normal; color: var(--fg-2); }
+
+/* ---- coordinate diagram card --------------------------------------------- */
+.md-typeset .coord-fig {
+  background: #f8f4ec;
+  border: 1px solid rgba(33, 26, 18, 0.10);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin: 1.4em 0;
+  box-shadow: var(--shadow-1);
+}
+.md-typeset .coord-fig svg { width: 100%; height: auto; max-width: 480px; margin: 0 auto; display: block; }
+
+/* ============================================================================
+   bbox interactive playground (signature) — self-contained dark
+   ============================================================================ */
+.md-typeset .bbox-demo {
+  display: grid;
+  grid-template-columns: 1fr 230px;
+  border: 1px solid #000;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-2);
+  background: #1a1715;
+  margin: 1.6em 0;
+}
+.md-typeset .bbox-stage { position: relative; background: #14110e; display: grid; place-items: center; padding: 18px; min-height: 320px; overflow: hidden; }
+.md-typeset .bbox-canvas { position: relative; display: inline-block; touch-action: none; }
+.md-typeset .bbox-canvas img { display: block; border-radius: 3px; box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.45); -webkit-user-drag: none; user-select: none; max-height: 420px; width: auto; }
+.md-typeset .bbox-rect { position: absolute; border: 2px solid #d9a55f; box-shadow: 0 0 0 1px rgba(0,0,0,.5), 0 0 0 9999px rgba(18,18,22,.55); cursor: move; }
+.md-typeset .bbox-handle { position: absolute; right: -7px; bottom: -7px; width: 14px; height: 14px; background: #d9a55f; border: 2px solid #14110e; border-radius: 3px; cursor: nwse-resize; }
+.md-typeset .bbox-readout { background: #211d18; border-left: 1px solid rgba(255,255,255,.08); padding: 16px; color: #d4cab5; font-size: 0.78rem; }
+.md-typeset .bbox-readout .ro-title { font-family: var(--mono); font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase; color: #c7935a; margin-bottom: 12px; }
+.md-typeset .bbox-readout .ro-row { display: flex; justify-content: space-between; align-items: baseline; padding: 5px 0; border-bottom: 1px dashed rgba(255,255,255,.08); }
+.md-typeset .bbox-readout .ro-row .k { color: #9a8f78; font-family: var(--mono); }
+.md-typeset .bbox-readout .ro-row .v { font-family: var(--mono); color: #e6ddca; font-weight: 600; }
+.md-typeset .bbox-json { margin-top: 14px; background: #14110e; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; padding: 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.6; color: #b8ad97; white-space: pre-wrap; word-break: break-word; }
+.md-typeset .bbox-json .c-key { color: #d9a55f; }
+.md-typeset .bbox-json .c-num { color: #c9a76a; }
+.md-typeset .bbox-hint { font-size: 11.5px; color: #8a8170; margin-top: 12px; line-height: 1.45; }
+
+/* responsive */
+@media screen and (max-width: 640px) {
+  .md-typeset .bbox-demo { grid-template-columns: 1fr; }
+  .md-typeset .bbox-readout { border-left: none; border-top: 1px solid rgba(255,255,255,.08); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-typeset .bbox-rect { transition: none; }
+}

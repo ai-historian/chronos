@@ -1,0 +1,3 @@
+# Documentation site (MkDocs + Material). Build with: mkdocs build
+# Serve locally with: mkdocs serve
+mkdocs-material>=9.5
