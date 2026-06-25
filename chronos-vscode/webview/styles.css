@@ -2556,6 +2556,14 @@ chronos-data-viewer,
   font-variant-numeric: tabular-nums;
 }
 
+/* Once the user resizes a column, widths become authoritative: fixed layout
+   honors them exactly and the table grows to its content (the .dv-scroll
+   container then provides horizontal scrolling). */
+.dv-table.is-resized {
+  table-layout: fixed;
+  width: max-content;
+}
+
 .dv-table th,
 .dv-table td {
   text-align: left;
@@ -2576,6 +2584,48 @@ chronos-data-viewer,
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+}
+
+/* When widths are fixed, clip overflowing headers so a narrow column ellipsizes
+   its label instead of spilling over the next one. */
+.dv-table.is-resized thead th {
+  overflow: hidden;
+}
+
+.dv-col-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Right-edge grab zone. Sits over the cell's right padding; a hairline appears
+   on hover/drag. The th is sticky (already a positioning context), so this
+   absolutely-positioned handle anchors to it. */
+.dv-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.dv-resize::after {
+  content: "";
+  position: absolute;
+  top: 18%;
+  bottom: 18%;
+  right: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.dv-resize:hover::after {
+  background: var(--ch-border);
 }
 
 .dv-table thead th:hover {
