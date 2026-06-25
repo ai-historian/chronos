@@ -197,13 +197,19 @@ function coerceBbox(value: unknown): Bbox | null {
   return null;
 }
 
-// Resolve a workspace-relative path and refuse anything that escapes the root.
+// Resolve a workspace-relative path and refuse anything that escapes the root or
+// reaches into a restricted directory. Mirrors walkFiles' policy (dot-dirs and
+// SKIP_DIRS are off-limits) so the always-on read_file/list_dir/grep tools can't
+// read workspace secrets such as .chronos/.env, which the walk path already skips.
 function resolveInWorkspace(cwd: string, p: string): string {
   const abs = resolve(cwd, p);
   const rel = relative(cwd, abs);
-  if (rel === "" ) return abs;
+  if (rel === "") return abs;
   if (rel.startsWith("..") || isAbsolute(rel)) {
     throw new Error("Path is outside the workspace.");
+  }
+  if (rel.split(/[\\/]/).some((seg) => seg.startsWith(".") || SKIP_DIRS.has(seg))) {
+    throw new Error("Path is in a restricted directory.");
   }
   return abs;
 }
@@ -304,6 +310,7 @@ export async function executeExpertTool(call: ToolCall, ctx: ExpertToolContext):
       try {
         const abs = p ? resolveInWorkspace(ctx.cwd, p) : ctx.cwd;
         const entries = readdirSync(abs, { withFileTypes: true })
+          .filter((e) => !(e.name.startsWith(".") || SKIP_DIRS.has(e.name)))
           .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
           .sort();
         return text(entries.join("\n") || "(empty directory)", p || ".");
