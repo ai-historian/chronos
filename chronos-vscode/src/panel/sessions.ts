@@ -67,7 +67,13 @@ function parseSessionFile(filePath: string): ChronosSessionInfo | undefined {
         if (entry.message?.role === "user") {
           messageCount++;
           if (!firstUserMessage) {
-            firstUserMessage = firstTextOf(entry.message?.content)?.slice(0, 200);
+            const text = firstTextOf(entry.message?.content);
+            // Skip the synthetic "Source selected: …" follow-up that /select-source
+            // injects, so it never becomes the session label (the agent-side namer
+            // skips it too; this keeps the degraded fallback meaningful).
+            if (text && !text.startsWith("Source selected:")) {
+              firstUserMessage = text.slice(0, 200);
+            }
           }
         }
       } catch {

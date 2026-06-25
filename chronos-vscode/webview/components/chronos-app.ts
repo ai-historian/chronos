@@ -313,17 +313,23 @@ export class ChronosApp extends LitElement {
     e.preventDefault();
     const root = this.querySelector<HTMLElement>("#app-main");
     if (!root) return;
+    // Capture on the splitter so a pointerup released outside the webview still
+    // tears the listeners down (a missed window pointerup would leak onMove).
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
     const onMove = (ev: PointerEvent) => {
       const rect = root.getBoundingClientRect();
       this.splitPct = Math.max(25, Math.min(75, ((ev.clientX - rect.left) / rect.width) * 100));
     };
     const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("lostpointercapture", onUp);
       this.dispatchEvent(new CustomEvent("ui-state-changed", { bubbles: true }));
     };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("lostpointercapture", onUp); // also covers pointercancel
   }
 
   // ── render ────────────────────────────────────────────────────────────────
@@ -412,7 +418,7 @@ export class ChronosApp extends LitElement {
           ${this.renderContextMeter()}
           <button
             class="header-btn login-btn ${this.loginRequired ? "is-attn" : ""}"
-            title="Connect an AI provider (saves an API key to .chronos/.env)"
+            title="Connect an AI provider (Claude subscription sign-in, or an API key)"
             @click=${() => this.postMessage({ type: "login" })}
           >
             Log in
@@ -441,7 +447,7 @@ export class ChronosApp extends LitElement {
       <div class="login-banner">
         <span class="login-banner-text">
           <strong>No AI models available.</strong>
-          Connect a provider to get started — your key is saved to <code>.chronos/.env</code>.
+          Connect a provider to get started — sign in with your Claude subscription, or add an API key.
         </span>
         <button class="login-banner-btn" @click=${() => this.postMessage({ type: "login" })}>
           Connect provider
