@@ -9,7 +9,7 @@
  */
 import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { pickCheapestModelSpec, resolveExpertModel } from "./resolve-model.js";
+import { helperModelCandidates, resolveExpertModel } from "./resolve-model.js";
 
 const MAX_PROMPTS = 6;
 const MAX_INPUT_CHARS = 4000;
@@ -31,14 +31,13 @@ function cleanTitle(raw: string): string | undefined {
 export async function generateSessionTitle(
   registry: ModelRegistry,
   userPrompts: string[],
+  orchestrator?: { provider: string; id: string },
 ): Promise<string | undefined> {
   const prompts = userPrompts.map((p) => p.trim()).filter(Boolean).slice(0, MAX_PROMPTS);
   if (prompts.length === 0) return undefined;
 
-  const spec = pickCheapestModelSpec(registry);
-  if (!spec) return undefined;
-  const resolved = await resolveExpertModel(spec, registry, undefined, false);
-  if (!resolved.ok) return undefined;
+  const candidates = helperModelCandidates(registry, orchestrator);
+  if (candidates.length === 0) return undefined;
 
   const joined = prompts.map((p, i) => `${i + 1}. ${p}`).join("\n").slice(0, MAX_INPUT_CHARS);
   const userMessage: UserMessage = {
@@ -47,19 +46,27 @@ export async function generateSessionTitle(
     timestamp: Date.now(),
   };
 
-  try {
-    const response = await complete(
-      resolved.model,
-      { systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-      { apiKey: resolved.apiKey, headers: resolved.headers },
-    );
-    if (response.stopReason === "error") return undefined;
-    const text = response.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text)
-      .join("");
-    return cleanTitle(text);
-  } catch {
-    return undefined;
+  // Try candidates best-first; skip any that won't resolve or whose call errors
+  // (e.g. the registry ranks a decommissioned model cheapest — it 404s here).
+  for (const spec of candidates) {
+    const resolved = await resolveExpertModel(spec, registry, undefined, false);
+    if (!resolved.ok) continue;
+    try {
+      const response = await complete(
+        resolved.model,
+        { systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
+        { apiKey: resolved.apiKey, headers: resolved.headers },
+      );
+      if (response.stopReason === "error") continue;
+      const text = response.content
+        .filter((c): c is { type: "text"; text: string } => c.type === "text")
+        .map((c) => c.text)
+        .join("");
+      const title = cleanTitle(text);
+      if (title) return title;
+    } catch {
+      continue;
+    }
   }
+  return undefined;
 }
