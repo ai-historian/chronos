@@ -77,6 +77,26 @@ function hasLocalChronosCheckout(): boolean {
   return piPackageSources().some((s) => isChronosEntry(s) && !isGitUrlEntry(s));
 }
 
+// True when pi + the pi-package are present AND already at the ref this extension
+// wants — i.e. ensureBootstrap would early-return true without running any
+// install/reinstall task. Auto-start is gated on this (not just deps-present) so
+// an unsolicited launch never fires a (re)install terminal — e.g. after an
+// extension upgrade leaves the stored ref stale, or an install previously failed.
+// A stale / un-set-up workspace falls back to the manual command / walkthrough.
+function bootstrapReconciled(context: vscode.ExtensionContext): boolean {
+  if (!hasPi() || !hasChronosPiPackage()) return false;
+  const cfg = vscode.workspace.getConfiguration("chronos");
+  const sourceOverride = cfg.get<string>("piPackageSource")?.trim();
+  if (!sourceOverride && hasLocalChronosCheckout()) return true;
+  const wantedId = sourceOverride || `v${context.extension.packageJSON.version}`;
+  return context.globalState.get("chronos.piPackageRef") === wantedId;
+}
+
+// Serialises chronos.startSession so a concurrent invocation (auto-start racing a
+// walkthrough/manual click) joins the in-flight start instead of constructing a
+// second panel + pi subprocess before ChronosPanel.current is assigned.
+let startingSession = false;
+
 // Run a shell command as a VS Code task and resolve with its exit code. A task
 // runs in the user's shell — login-shell PATH, sudo prompts, visible output, just
 // like the integrated terminal — but unlike terminal.sendText it reports
@@ -707,27 +727,35 @@ export function activate(context: vscode.ExtensionContext): {
         return;
       }
 
-      // ensureBootstrap runs any install as an awaited task and returns true only
-      // once deps are present, so a false result means the user declined or the
-      // install failed (it already surfaced the error) — just stop.
-      if (!(await ensureBootstrap(context))) return;
-      refreshWalkthroughContext(workspaceFolder);
+      // A start is already in flight (e.g. auto-start on activation); it will
+      // create or reveal the panel, so don't run a second bootstrap + createOrShow.
+      if (startingSession) return;
+      startingSession = true;
+      try {
+        // ensureBootstrap runs any install as an awaited task and returns true only
+        // once deps are present, so a false result means the user declined or the
+        // install failed (it already surfaced the error) — just stop.
+        if (!(await ensureBootstrap(context))) return;
+        refreshWalkthroughContext(workspaceFolder);
 
-      const workspaceEnv = readEnvFile(join(workspaceFolder, ".chronos", ".env"));
+        const workspaceEnv = readEnvFile(join(workspaceFolder, ".chronos", ".env"));
 
-      // Bind the HTTP server (lazily) so the port is assigned before the agent starts.
-      await httpServer.start();
+        // Bind the HTTP server (lazily) so the port is assigned before the agent starts.
+        await httpServer.start();
 
-      const agentEnv = {
-        CHRONOS_HTTP_PORT: String(httpServer.port),
-        // pi >= 0.7x dropped the session_directory extension hook; this env var
-        // keeps session transcripts inside the workspace in both UI modes.
-        PI_CODING_AGENT_SESSION_DIR: join(workspaceFolder, "sessions"),
-        ...workspaceEnv,
-      };
+        const agentEnv = {
+          CHRONOS_HTTP_PORT: String(httpServer.port),
+          // pi >= 0.7x dropped the session_directory extension hook; this env var
+          // keeps session transcripts inside the workspace in both UI modes.
+          PI_CODING_AGENT_SESSION_DIR: join(workspaceFolder, "sessions"),
+          ...workspaceEnv,
+        };
 
-      // pi runs as an RPC subprocess behind the combined viewer + chat panel.
-      await ChronosPanel.createOrShow(context.extensionUri, workspaceFolder, agentEnv);
+        // pi runs as an RPC subprocess behind the combined viewer + chat panel.
+        await ChronosPanel.createOrShow(context.extensionUri, workspaceFolder, agentEnv);
+      } finally {
+        startingSession = false;
+      }
     }),
 
     vscode.commands.registerCommand("chronos.showPage", async () => {
@@ -930,6 +958,25 @@ export function activate(context: vscode.ExtensionContext): {
   // Surface any imports interrupted by a previous crash so they don't fail silently.
   if (workspaceFolder && existsSync(join(workspaceFolder, "sources"))) {
     void promptRecoverIncompleteImports(workspaceFolder);
+  }
+
+  // Auto-start the agent session when this folder is a Chronos workspace (it has
+  // a .chronos/ dir — the same signal that marks the workspace "initialized").
+  // Gated on the bootstrap already being reconciled (deps present AND at the
+  // wanted ref) so an unsolicited launch never triggers an install/reinstall
+  // task — an un-set-up or just-upgraded workspace falls back to the manual
+  // command / walkthrough. Skipped under the integration test, which starts the
+  // session itself. Opt out with chronos.autoStartSession.
+  const autoStart = vscode.workspace.getConfiguration("chronos").get<boolean>("autoStartSession", true);
+  if (
+    process.env.CHRONOS_SKIP_BOOTSTRAP !== "1" &&
+    autoStart &&
+    workspaceFolder &&
+    existsSync(join(workspaceFolder, ".chronos")) &&
+    !ChronosPanel.active &&
+    bootstrapReconciled(context)
+  ) {
+    void vscode.commands.executeCommand("chronos.startSession");
   }
 
   return {

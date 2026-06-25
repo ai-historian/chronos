@@ -57,16 +57,24 @@
         "chronos.piPath": {
           "type": "string",
           "default": "",
+          "scope": "machine",
           "description": "Path to the pi binary. Leave empty to use \"pi\" from PATH."
+        },
+        "chronos.autoStartSession": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open the Chronos panel and start an agent session when a Chronos workspace (a folder containing .chronos/) is opened. Only auto-starts when pi and the Chronos pi-package are already installed; otherwise start it manually with \"Chronos: Start Agent Session\"."
         },
         "chronos.piPackageSource": {
           "type": "string",
           "default": "",
+          "scope": "machine",
           "markdownDescription": "**Dev override.** Source the setup flow installs the Chronos pi-package from. Accepts a local path (`/abs/path/to/chronos/chronos`), a git URL, or a git URL with a branch/tag using the `@` form (`https://github.com/ai-historian/chronos@my-branch`). Leave empty to use the GitHub release pinned to this extension's version."
         },
         "chronos.piNpmPackage": {
           "type": "string",
           "default": "",
+          "scope": "machine",
           "markdownDescription": "**Dev override.** npm package the setup flow installs for the `pi` CLI when pi isn't found. Leave empty for the default `@earendil-works/pi-coding-agent` (the maintained package). Set to override it — e.g. a fork or a version-pinned tag like `@earendil-works/pi-coding-agent@0.79.10`."
         }
       }
