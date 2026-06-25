@@ -231,6 +231,13 @@ export async function runExpertTurn(
         error: `Expert model error (${modelSpec(resolved.model)}): ${response.errorMessage ?? "unknown error"}`,
       };
     }
+    // A cancel that lands while complete() is in flight resolves with an
+    // "aborted" response rather than throwing. Treat it as a failed turn so it is
+    // neither committed to session.messages nor persisted, and the callers don't
+    // write its empty/partial text to an output_file as if it were a real answer.
+    if (input.signal?.aborted || response.stopReason === "aborted") {
+      return { ok: false, taskId, error: "Expert turn aborted." };
+    }
     turnMessages.push(response);
     finalResponse = response;
     totalCost += response.usage?.cost?.total ?? 0;

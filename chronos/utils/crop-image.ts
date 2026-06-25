@@ -8,10 +8,16 @@ export interface Bbox {
 }
 
 function bboxToPixels(bbox: Bbox, width: number, height: number) {
-  const left = Math.round(bbox.x * width);
-  const top = Math.round(bbox.y * height);
-  const cropW = Math.min(Math.round(bbox.w * width), width - left);
-  const cropH = Math.min(Math.round(bbox.h * height), height - top);
+  // Clamp the normalized box into bounds: an expert's view_region bbox isn't
+  // schema-validated at call time, so an out-of-range value would otherwise
+  // produce a negative/out-of-bounds extract that makes sharp throw. Keep the
+  // origin at most one pixel inside each edge so the crop is always ≥ 1px.
+  const x = Math.min(Math.max(bbox.x, 0), 1);
+  const y = Math.min(Math.max(bbox.y, 0), 1);
+  const left = Math.min(Math.round(x * width), width - 1);
+  const top = Math.min(Math.round(y * height), height - 1);
+  const cropW = Math.max(1, Math.min(Math.round(bbox.w * width), width - left));
+  const cropH = Math.max(1, Math.min(Math.round(bbox.h * height), height - top));
   return { left, top, cropW, cropH };
 }
 
