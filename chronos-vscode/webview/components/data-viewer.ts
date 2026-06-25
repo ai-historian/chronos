@@ -10,6 +10,14 @@ const RESERVED = {
   source: "chronos_source",
 } as const;
 
+// Width-map key for the provenance action column (it has no column name of its
+// own). Namespaced so it can't collide with a real data column.
+const PROV_COL = "__chronos_prov__";
+const MIN_COL_WIDTH = 48;
+// Upper bound for double-click auto-fit; matches the cell max-width cap so a
+// column with one very long entry doesn't blow out the whole table.
+const MAX_COL_WIDTH = 360;
+
 interface Row {
   [key: string]: unknown;
 }
@@ -73,7 +81,13 @@ function bboxList(value: unknown): (Bbox | null)[] {
   if (value === undefined || value === null) return [];
   const single = toBbox(value);
   if (single) return [single];
-  if (Array.isArray(value)) return value.map(toBbox);
+  if (Array.isArray(value)) {
+    // A flat array of bare numbers is one (malformed, non-4-tuple) bbox, not a
+    // parallel list — collapse it to a single null so it doesn't inflate the
+    // reference count. Only map element-wise for a real list (nested arrays/objects).
+    if (value.every((el) => typeof el === "number")) return [null];
+    return value.map(toBbox);
+  }
   return [];
 }
 
@@ -87,6 +101,10 @@ function rowProvenance(row: Row): Provenance[] {
   const sources = sourceList(row[RESERVED.source]);
   const count = Math.max(pages.length, bboxes.length, sources.length);
   const at = <T,>(list: T[], i: number): T | undefined => (list.length === 1 ? list[0] : list[i]);
+  // A single bbox broadcasts across several regions of ONE page (pages.length===1),
+  // but not across distinct pages — that region was measured on one page only, so
+  // applying it to the others would mis-crop them. Drop the bbox in that case.
+  const multiPage = pages.length > 1;
 
   const refs: Provenance[] = [];
   for (let i = 0; i < count; i++) {
@@ -94,7 +112,8 @@ function rowProvenance(row: Row): Provenance[] {
     // Skip just this slot when the page is missing/invalid — keep every other
     // reference aligned with its own bbox/source (don't shift the rest).
     if (pageId === undefined || Number.isNaN(pageId)) continue;
-    refs.push({ pageId, bbox: at(bboxes, i) ?? null, sourcePath: at(sources, i) ?? undefined });
+    const bbox = bboxes.length === 1 && multiPage ? null : at(bboxes, i) ?? null;
+    refs.push({ pageId, bbox, sourcePath: at(sources, i) ?? undefined });
   }
   return refs;
 }
@@ -116,6 +135,7 @@ export class ChronosDataViewer extends LitElement {
     sortDir: { state: true },
     preview: { state: true },
     previewPct: { state: true },
+    colWidths: { state: true },
   };
 
   declare sourceName: string;
@@ -127,6 +147,9 @@ export class ChronosDataViewer extends LitElement {
   declare sortDir: 1 | -1;
   declare preview: Preview | null;
   declare previewPct: number;
+  // Per-column pixel widths once the user has dragged a resize handle. Empty
+  // until first resize, when every column is seeded from its rendered width.
+  declare colWidths: Record<string, number>;
 
   private postMessage: (msg: WebviewToExt) => void = () => {};
 
@@ -141,6 +164,7 @@ export class ChronosDataViewer extends LitElement {
     this.sortDir = 1;
     this.preview = null;
     this.previewPct = 30;
+    this.colWidths = {};
   }
 
   protected createRenderRoot(): HTMLElement {
@@ -172,6 +196,27 @@ export class ChronosDataViewer extends LitElement {
     if (filename !== this.selected) return;
     this.content = content;
     this.loading = false;
+    this.pruneColWidths(content);
+  }
+
+  // A Refresh reloads the same file in place, and the agent may rewrite an
+  // extraction output with added/removed/renamed columns. Drop width keys that
+  // no longer match a live column so a schema change doesn't leave orphan keys or
+  // (via the `resized` every-column guard) silently revert the table to auto
+  // layout on a column that merely changed name.
+  private pruneColWidths(content: string): void {
+    if (Object.keys(this.colWidths).length === 0) return;
+    const parsed = this.parse(content);
+    if (parsed.kind !== "table") {
+      this.colWidths = {};
+      return;
+    }
+    const allowed = new Set<string>([...parsed.columns, PROV_COL]);
+    const next: Record<string, number> = {};
+    for (const [k, v] of Object.entries(this.colWidths)) {
+      if (allowed.has(k)) next[k] = v;
+    }
+    this.colWidths = next;
   }
 
   /** Reset to the empty state (no source bound) — e.g. when a new session starts. */
@@ -182,6 +227,7 @@ export class ChronosDataViewer extends LitElement {
     this.content = null;
     this.loading = false;
     this.preview = null;
+    this.colWidths = {};
   }
 
   private selectFile(filename: string | null): void {
@@ -189,6 +235,7 @@ export class ChronosDataViewer extends LitElement {
     this.content = null;
     this.sortColumn = null;
     this.preview = null;
+    this.colWidths = {};
     if (filename) {
       this.loading = true;
       this.postMessage({ type: "data/load", filename });
@@ -256,6 +303,89 @@ export class ChronosDataViewer extends LitElement {
       this.sortColumn = column;
       this.sortDir = 1;
     }
+  }
+
+  // Drag a header's right-edge handle to resize that column. The first drag
+  // seeds every column's current rendered width and flips the table to fixed
+  // layout, so untouched columns stay put and the table can grow past the
+  // viewport (the scroll container then scrolls horizontally).
+  private onColResizeDown(e: PointerEvent, column: string): void {
+    e.preventDefault();
+    e.stopPropagation(); // don't trigger the header's sort click
+    const table = this.querySelector<HTMLTableElement>(".dv-table");
+    if (!table) return;
+    const widths = this.seedWidths(table);
+    const startX = e.clientX;
+    const startW = widths[column] ?? MIN_COL_WIDTH;
+    // Capture the pointer on the handle so the drag keeps tracking — and its
+    // teardown always fires — even when the pointer leaves the webview and the
+    // button is released outside it. A window-level pointerup is missed in that
+    // case, which would leak the move listener and glue the column to the cursor.
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const onMove = (ev: PointerEvent) => {
+      const w = Math.max(MIN_COL_WIDTH, Math.round(startW + (ev.clientX - startX)));
+      this.colWidths = { ...this.colWidths, [column]: w };
+    };
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("lostpointercapture", onUp);
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("lostpointercapture", onUp); // also covers pointercancel
+  }
+
+  // Double-click the handle to auto-fit the column to its widest cell, capped at
+  // MAX_COL_WIDTH (a longer single entry then wraps within that width).
+  private onColResizeDblClick(e: MouseEvent, column: string): void {
+    e.preventDefault();
+    e.stopPropagation();
+    const table = this.querySelector<HTMLTableElement>(".dv-table");
+    const th = (e.currentTarget as HTMLElement).closest("th") as HTMLTableCellElement | null;
+    if (!table || !th) return;
+    this.seedWidths(table); // lock the other columns before we change this one
+    const fit = Math.max(MIN_COL_WIDTH, Math.min(MAX_COL_WIDTH, this.measureColumnFit(table, th)));
+    this.colWidths = { ...this.colWidths, [column]: fit };
+  }
+
+  // On first interaction, capture every column's current rendered width so the
+  // table can flip to fixed layout without the untouched columns shifting.
+  private seedWidths(table: HTMLTableElement): Record<string, number> {
+    if (Object.keys(this.colWidths).length > 0) return this.colWidths;
+    const seeded: Record<string, number> = {};
+    table.querySelectorAll<HTMLElement>("thead th[data-col]").forEach((th) => {
+      const c = th.dataset.col;
+      if (c) seeded[c] = th.getBoundingClientRect().width;
+    });
+    this.colWidths = seeded;
+    return seeded;
+  }
+
+  // Widest of the header label and every body cell in this column, measured
+  // single-line via canvas (layout-independent), plus cell padding.
+  private measureColumnFit(table: HTMLTableElement, th: HTMLTableCellElement): number {
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (!ctx) return MIN_COL_WIDTH;
+    const fontOf = (el: Element | null): string => {
+      const cs = getComputedStyle(el ?? th);
+      return `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+    };
+    const idx = th.cellIndex;
+    const label = th.querySelector(".dv-col-label");
+    ctx.font = fontOf(label);
+    let max = ctx.measureText(label?.textContent ?? "").width;
+    const body = table.tBodies[0];
+    if (body) {
+      ctx.font = fontOf(body.rows[0]?.cells[idx] ?? null);
+      for (const row of Array.from(body.rows)) {
+        const text = row.cells[idx]?.textContent ?? "";
+        const w = ctx.measureText(text).width;
+        if (w > max) max = w;
+      }
+    }
+    return Math.round(max + 20 /* 10px padding each side */ + 2 /* anti-ellipsis slack */);
   }
 
   // Row "view source": show the cited region inline at the bottom of the data
@@ -399,17 +529,23 @@ export class ChronosDataViewer extends LitElement {
     e.preventDefault();
     const root = this.querySelector<HTMLElement>(".dv-root");
     if (!root) return;
+    // Capture on the splitter so a pointerup outside the webview still tears the
+    // listeners down (a missed window pointerup would leak the move handler).
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
     const onMove = (ev: PointerEvent) => {
       const rect = root.getBoundingClientRect();
       // Preview is docked at the bottom: its height is from the pointer to the foot.
       this.previewPct = Math.max(15, Math.min(70, ((rect.bottom - ev.clientY) / rect.height) * 100));
     };
     const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("lostpointercapture", onUp);
     };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("lostpointercapture", onUp); // also covers pointercancel
   }
 
   private renderPreview(): TemplateResult {
@@ -480,14 +616,38 @@ export class ChronosDataViewer extends LitElement {
   private renderTable(parsed: Extract<Parsed, { kind: "table" }>): TemplateResult {
     const { rows, provenance } = this.sortRows(parsed);
     const hasProvenance = provenance.some((refs) => refs.length > 0);
+    // Only switch to fixed layout once every visible column has a recorded width
+    // — otherwise a column without a width would collapse under fixed layout.
+    const resized =
+      Object.keys(this.colWidths).length > 0 &&
+      parsed.columns.every((c) => this.colWidths[c] != null) &&
+      (!hasProvenance || this.colWidths[PROV_COL] != null);
+    const widthStyle = (c: string): string | undefined =>
+      resized && this.colWidths[c] != null ? `width:${this.colWidths[c]}px` : undefined;
     return html`
-      <table class="dv-table">
+      <table class="dv-table ${resized ? "is-resized" : ""}">
         <thead>
           <tr>
-            ${hasProvenance ? html`<th class="dv-prov-head" title="Jump to source page">⤢</th>` : nothing}
+            ${hasProvenance
+              ? html`<th class="dv-prov-head" data-col=${PROV_COL} style=${widthStyle(PROV_COL)} title="Jump to source page">⤢</th>`
+              : nothing}
             ${parsed.columns.map(
-              (c) => html`<th @click=${() => this.toggleSort(c)} class=${this.sortColumn === c ? "is-sorted" : ""}>
-                ${c}${this.sortColumn === c ? html`<span class="dv-sort">${this.sortDir === 1 ? "▲" : "▼"}</span>` : nothing}
+              (c) => html`<th
+                data-col=${c}
+                style=${widthStyle(c)}
+                @click=${() => this.toggleSort(c)}
+                class=${this.sortColumn === c ? "is-sorted" : ""}
+              >
+                <span class="dv-col-label"
+                  >${c}${this.sortColumn === c ? html`<span class="dv-sort">${this.sortDir === 1 ? "▲" : "▼"}</span>` : nothing}</span
+                >
+                <span
+                  class="dv-resize"
+                  title="Drag to resize · double-click to fit"
+                  @pointerdown=${(e: PointerEvent) => this.onColResizeDown(e, c)}
+                  @dblclick=${(e: MouseEvent) => this.onColResizeDblClick(e, c)}
+                  @click=${(e: Event) => e.stopPropagation()}
+                ></span>
               </th>`,
             )}
           </tr>
