@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { resolvePiBin } from "../pi-env";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, basename, isAbsolute } from "node:path";
 import { PiRpcSession } from "../rpc/pi-rpc-session";
@@ -56,7 +56,15 @@ function upsertEnvVar(envPath: string, key: string, value: string): void {
     : [];
   while (kept.length && kept[kept.length - 1].trim() === "") kept.pop();
   kept.push(`${key}=${value}`);
-  writeFileSync(envPath, kept.join("\n") + "\n", "utf-8");
+  // The .env holds billing-bearing provider API keys — keep it owner-only.
+  // writeFileSync's mode only applies on creation, so chmod too to tighten a
+  // pre-existing (possibly group/world-readable) file.
+  writeFileSync(envPath, kept.join("\n") + "\n", { encoding: "utf-8", mode: 0o600 });
+  try {
+    chmodSync(envPath, 0o600);
+  } catch {
+    /* best-effort (e.g. unsupported fs) */
+  }
 }
 
 // Write an Anthropic OAuth credential into pi's global auth store
@@ -74,8 +82,16 @@ function writeAnthropicOAuth(creds: AnthropicOAuthCredentials): void {
     }
   }
   store.anthropic = { type: "oauth", refresh: creds.refresh, access: creds.access, expires: creds.expires };
-  mkdirSync(dirname(authPath), { recursive: true });
+  // Mirror pi's auth-storage hardening: owner-only dir + file. writeFileSync's
+  // mode only applies on creation, so chmod too in case auth.json pre-exists
+  // with looser permissions (it holds long-lived OAuth refresh/access tokens).
+  mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
   writeFileSync(authPath, JSON.stringify(store, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
+  try {
+    chmodSync(authPath, 0o600);
+  } catch {
+    /* best-effort */
+  }
 }
 
 // pi auto-registers every .md in a package's prompts/ dir as a slash command,
