@@ -20,6 +20,9 @@ Install the **Chronos — The AI Historian** extension from inside VS Code:
 2. Search for **Chronos — The AI Historian**.
 3. Click **Install**.
 
+![Find and install the Chronos extension](assets/install-03-select-extension.png)
+*Several extensions match "Chronos" — pick **Chronos — The AI Historian** (by AI-Historian), then click **Install**.*
+
 That's it. The first time you run a Chronos command, the extension checks for [`pi`](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) (the AI agent framework Chronos runs on) and the Chronos pi-package, and offers to install both in a terminal — no manual `npm install -g` or `pi install` step required.
 
 <details>
@@ -44,13 +47,24 @@ The `.vsix` is published on [GitHub Releases](https://github.com/ai-historian/ch
 
 ## Getting started
 
+Every Chronos action lives in the Command Palette — press `Ctrl+Shift+P` and type *chronos*.
+
+![Chronos commands in the Command Palette](assets/guide-03-command-palette.png)
+*The three steps below all start here: **Start Agent Session**, **Connect AI Provider**, and **Import Sources**.*
+
 ### 1. Initialize a workspace
 
 Open VS Code in an empty folder. Press `Ctrl+Shift+P` and run **Chronos: Init Workspace**. This creates the workspace structure. (You connect an AI provider in step 3 — no key is needed yet.)
 
+![The workspace scaffold created by Init Workspace](assets/guide-02-workspace-ready.png)
+*Init Workspace scaffolds `sources/`, `data/`, `memory/`, `skills/`, and `sessions/` into the folder.*
+
 ### 2. Import sources
 
 Press `Ctrl+Shift+P` and run **Chronos: Import Sources**. Choose whether to select individual files or a whole folder of source material — PDFs, images (PNG, JPG, TIFF, BMP), or text files. Each file is treated as a source. PDFs are automatically converted to page images. You can import additional sources at any time by running the command again.
+
+![Import individual files or a whole folder](assets/guide-06-import-picker.png)
+*Pick individual files (PDF / image / text) or a whole folder.*
 
 Converting a large PDF can take a few minutes. Imports are crash-safe: a source only appears once it has finished converting, and if VS Code is closed or crashes mid-conversion, Chronos detects the interrupted import on the next launch (and when you next run **Import Sources**) and offers to **Resume** it (it picks up where it left off) or **Discard** the partial data.
 
@@ -60,14 +74,23 @@ Converting a large PDF can take a few minutes. Imports are crash-safe: a source 
 
 Press `Ctrl+Shift+P` and run **Chronos: Start Agent Session**. The Chronos panel opens — a page viewer on the left and a chat on the right.
 
+![The Chronos panel header](assets/guide-04-session-panel.png)
+*From the panel header you select a **Source**, **Log in**, or start a **New** session.*
+
 On first startup no AI models are available until you connect a provider. Click **Log in** in the panel header (or run **Chronos: Connect AI Provider**) and choose how to sign in:
 
 - **Anthropic — Claude Pro/Max (subscription):** signs in with your Claude subscription via OAuth in the browser — no API key needed. The credential is stored in pi's `~/.pi/agent/auth.json`.
 - **API key (any provider):** paste a key; Chronos saves it to the workspace `.chronos/.env`.
 
+![Choosing how to sign in](assets/guide-05-choose-provider.png)
+*Sign in with a Claude subscription, or paste an API key for any supported provider.*
+
 Either way Chronos reconnects automatically. You can switch or add providers the same way at any time.
 
 Pick a source from the header dropdown (or type `/select-source`) and begin working.
+
+![A selected source with its pages in the viewer](assets/guide-07-source-loaded.png)
+*Once a source is selected, its pages render in the viewer and the agent is ready.*
 
 ## Configuration
 
