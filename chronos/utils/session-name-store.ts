@@ -47,8 +47,11 @@ export function getNamedPromptCount(workspaceDir: string, sessionId: string): nu
 /**
  * Cache (or refine) a generated display name. `fromPrompts` records how many
  * prompts it summarises; a later call with more prompts overwrites it. Writes
- * atomically (temp + rename) and re-reads immediately before writing so a
- * concurrent writer's entry for a different session isn't clobbered.
+ * atomically (temp + rename) so a reader never sees a torn file. This does NOT
+ * serialise concurrent writers in separate processes (e.g. the same workspace
+ * open in two windows): a same-instant race can drop one session's entry, which
+ * is regenerated on the next agent_end. Within a single process, naming is
+ * already serialised by the in-flight guard in maybeNameSession.
  */
 export function saveSessionName(workspaceDir: string, sessionId: string, name: string, fromPrompts: number): void {
   if (!sessionId || !name) return;

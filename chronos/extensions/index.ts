@@ -305,7 +305,7 @@ async function maybeNameSession(ctx: ExtensionContext): Promise<void> {
 
     namingInFlight.add(sessionId);
     try {
-      const title = await generateSessionTitle(ctx.modelRegistry, prompts);
+      const title = await generateSessionTitle(ctx.modelRegistry, prompts, ctx.model);
       if (title) saveSessionName(ctx.cwd, sessionId, title, target);
     } finally {
       namingInFlight.delete(sessionId);
