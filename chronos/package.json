@@ -3,6 +3,7 @@
   "version": "0.2.1",
   "description": "AI economic historian agent for digitizing historical German city directories",
   "type": "module",
+  "license": "LicenseRef-PolyForm-Noncommercial-1.0.0",
   "keywords": ["pi-package"],
   "pi": {
     "extensions": ["./dist/extensions"],
