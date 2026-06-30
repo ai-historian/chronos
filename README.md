@@ -141,4 +141,6 @@ See [DOCS.md](DOCS.md) for technical details on workspace structure, tools, skil
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+Chronos is licensed under the [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0). You may use, modify, and share it freely for any **noncommercial** purpose (including research, education, and use by nonprofit and government organizations). Commercial use requires a separate license — please get in touch.
+
+See [LICENSE](LICENSE) for the full terms.
