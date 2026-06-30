@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { resolvePiBin } from "../pi-env";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, basename, isAbsolute } from "node:path";
 import { PiRpcSession } from "../rpc/pi-rpc-session";
@@ -9,6 +9,15 @@ import type { AgentToExtensionMessage } from "../protocol";
 import type { Bbox, ExtToWebview, WebviewToExt } from "./webview-protocol";
 import { discoverSources, countPages } from "./sources";
 import { listSessions, readSessionMessages } from "./sessions";
+import {
+  beginAnthropicLogin,
+  startCallbackServer,
+  completeAnthropicLogin,
+  parseAuthorizationInput,
+  type AnthropicOAuthCredentials,
+  type AuthCode,
+  type CallbackServer,
+} from "../anthropic-oauth";
 
 function getNonce(): string {
   let text = "";
@@ -20,6 +29,70 @@ function getNonce(): string {
 }
 
 export type AgentStatus = "starting" | "ready" | "failed" | "exited";
+
+// Providers offered by the native login flow → the env var pi reads the key
+// from (see pi-ai env-api-keys). "Other" lets the user name any other var.
+const LOGIN_PROVIDERS: { label: string; envVar: string }[] = [
+  { label: "Anthropic (Claude)", envVar: "ANTHROPIC_API_KEY" },
+  { label: "Google (Gemini)", envVar: "GEMINI_API_KEY" },
+  { label: "OpenAI", envVar: "OPENAI_API_KEY" },
+  { label: "OpenRouter", envVar: "OPENROUTER_API_KEY" },
+  { label: "xAI (Grok)", envVar: "XAI_API_KEY" },
+  { label: "Groq", envVar: "GROQ_API_KEY" },
+  { label: "Mistral", envVar: "MISTRAL_API_KEY" },
+  { label: "DeepSeek", envVar: "DEEPSEEK_API_KEY" },
+];
+
+// Set KEY=value in a .env file, replacing any existing assignment of KEY.
+function upsertEnvVar(envPath: string, key: string, value: string): void {
+  mkdirSync(dirname(envPath), { recursive: true });
+  const kept = existsSync(envPath)
+    ? readFileSync(envPath, "utf-8")
+        .split("\n")
+        .filter((line) => {
+          const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+          return !(m && m[1] === key);
+        })
+    : [];
+  while (kept.length && kept[kept.length - 1].trim() === "") kept.pop();
+  kept.push(`${key}=${value}`);
+  // The .env holds billing-bearing provider API keys — keep it owner-only.
+  // writeFileSync's mode only applies on creation, so chmod too to tighten a
+  // pre-existing (possibly group/world-readable) file.
+  writeFileSync(envPath, kept.join("\n") + "\n", { encoding: "utf-8", mode: 0o600 });
+  try {
+    chmodSync(envPath, 0o600);
+  } catch {
+    /* best-effort (e.g. unsupported fs) */
+  }
+}
+
+// Write an Anthropic OAuth credential into pi's global auth store
+// (~/.pi/agent/auth.json), merging with any existing providers. This is the
+// same file/shape pi's own /login writes, so pi reads and refreshes it.
+function writeAnthropicOAuth(creds: AnthropicOAuthCredentials): void {
+  const authPath = join(homedir(), ".pi", "agent", "auth.json");
+  let store: Record<string, unknown> = {};
+  if (existsSync(authPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(authPath, "utf-8"));
+      if (parsed && typeof parsed === "object") store = parsed as Record<string, unknown>;
+    } catch {
+      store = {};
+    }
+  }
+  store.anthropic = { type: "oauth", refresh: creds.refresh, access: creds.access, expires: creds.expires };
+  // Mirror pi's auth-storage hardening: owner-only dir + file. writeFileSync's
+  // mode only applies on creation, so chmod too in case auth.json pre-exists
+  // with looser permissions (it holds long-lived OAuth refresh/access tokens).
+  mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
+  writeFileSync(authPath, JSON.stringify(store, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
+  try {
+    chmodSync(authPath, 0o600);
+  } catch {
+    /* best-effort */
+  }
+}
 
 // pi auto-registers every .md in a package's prompts/ dir as a slash command,
 // but the chronos package ships those files as agent-internal tool text (the
@@ -192,33 +265,9 @@ export class ChronosPanel {
 
   // ── agent lifecycle ───────────────────────────────────────────────────────
 
-  private resolvePiBin(): string {
-    const configured = vscode.workspace.getConfiguration("chronos").get<string>("piPath");
-    if (configured?.trim()) return configured.trim();
-    // GUI-launched VS Code doesn't source shell rc files, so PATH may miss the
-    // npm global bin dir. Probe PATH first, then common install locations.
-    try {
-      execSync(process.platform === "win32" ? "where pi" : "command -v pi", { stdio: "ignore" });
-      return "pi";
-    } catch {
-      const home = homedir();
-      const candidates = [
-        join(home, ".npm-global", "bin", "pi"),
-        join(home, ".local", "bin", "pi"),
-        join(home, ".npm", "bin", "pi"),
-        "/usr/local/bin/pi",
-        "/opt/homebrew/bin/pi",
-      ];
-      for (const candidate of candidates) {
-        if (existsSync(candidate)) return candidate;
-      }
-      return "pi"; // let spawn fail with a clear ENOENT
-    }
-  }
-
   private async startAgent(): Promise<void> {
     const rpc = new PiRpcSession({
-      piBin: this.resolvePiBin(),
+      piBin: resolvePiBin(),
       workspaceDir: this.workspaceDir,
       env: this.agentEnv,
     });
@@ -266,8 +315,18 @@ export class ChronosPanel {
     void this.postHistory(state);
     void this.rpc
       ?.request<{ models: ModelInfo[] }>({ type: "get_available_models" })
-      .then((data) => this.post({ type: "models", models: data.models }))
-      .catch(() => {});
+      .then((data) => {
+        const models = data.models ?? [];
+        this.post({ type: "models", models });
+        // No models means no provider is authenticated — surface the login CTA.
+        this.post({ type: "loginRequired", required: models.length === 0 });
+      })
+      .catch(() => {
+        // The agent already started (rpc.start resolved), so a transient
+        // get_available_models failure shouldn't strand a stale "logged out"
+        // banner after a successful login — clear it; the next re-seed corrects it.
+        this.post({ type: "loginRequired", required: false });
+      });
     void this.rpc
       ?.request<{ commands: RpcSlashCommand[] }>({ type: "get_commands" })
       .then((data) => this.post({ type: "commands", commands: (data.commands ?? []).filter(isUserCommand) }))
@@ -338,6 +397,155 @@ export class ChronosPanel {
     this.rpc = null;
     await this.startAgent();
     this.post({ type: "agentRestarted" });
+  }
+
+  /**
+   * Connect an AI provider without leaving the panel: pick a provider, enter its
+   * API key, persist it to .chronos/.env, and restart the agent so pi picks it
+   * up. Provider-agnostic — pi reads <PROVIDER>_API_KEY from the subprocess env.
+   * (pi's own /login is a TUI-only flow with no RPC equivalent.)
+   */
+  async promptLogin(): Promise<void> {
+    type LoginItem = vscode.QuickPickItem & {
+      action: "oauth-anthropic" | "api-key" | "other";
+      envVar?: string;
+      provider?: string;
+    };
+    const items: LoginItem[] = [
+      {
+        label: "Anthropic — Claude Pro/Max (subscription sign-in)",
+        detail: "OAuth — uses your Claude subscription, no API key",
+        action: "oauth-anthropic",
+      },
+      ...LOGIN_PROVIDERS.map((p): LoginItem => ({
+        label: `${p.label} — API key`,
+        detail: p.envVar,
+        action: "api-key",
+        envVar: p.envVar,
+        provider: p.label,
+      })),
+      { label: "Other provider — API key…", detail: "Enter the environment variable name", action: "other" },
+    ];
+    const picked = await vscode.window.showQuickPick(items, { placeHolder: "Connect an AI provider" });
+    if (!picked) return;
+
+    if (picked.action === "oauth-anthropic") {
+      await this.loginAnthropicSubscription();
+      return;
+    }
+
+    let envVar = picked.envVar ?? "";
+    let providerLabel = picked.provider ?? "provider";
+    if (picked.action === "other") {
+      envVar = (
+        await vscode.window.showInputBox({
+          prompt: "API-key environment variable name",
+          placeHolder: "e.g. TOGETHER_API_KEY",
+        })
+      )?.trim() ?? "";
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envVar)) return;
+      providerLabel = envVar;
+    }
+
+    const key = (
+      await vscode.window.showInputBox({
+        prompt: `Enter your ${providerLabel} API key`,
+        password: true,
+        ignoreFocusOut: true,
+      })
+    )?.trim();
+    if (!key) return;
+
+    try {
+      upsertEnvVar(join(this.workspaceDir, ".chronos", ".env"), envVar, key);
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Could not write .chronos/.env: ${(err as Error).message}` });
+      return;
+    }
+    // Make the new key live for the next spawn and restart so models populate.
+    this.agentEnv[envVar] = key;
+    this.post({ type: "notify", level: "info", message: `Saved ${envVar}. Restarting agent…` });
+    await this.restartAgent();
+  }
+
+  /**
+   * Anthropic subscription (Claude Pro/Max) login via OAuth, driven entirely
+   * from the panel: open the browser, capture the redirect on a localhost
+   * callback (or accept a pasted code), exchange it for tokens, write the
+   * credential to ~/.pi/agent/auth.json (what pi reads), and restart the agent.
+   */
+  private async loginAnthropicSubscription(): Promise<void> {
+    let codeRes: AuthCode | undefined;
+    let verifier = "";
+    try {
+      const begun = await beginAnthropicLogin();
+      verifier = begun.verifier;
+      let server: CallbackServer | undefined;
+      try {
+        server = await startCallbackServer();
+      } catch {
+        server = undefined; // port unavailable → fall back to manual code entry
+      }
+      try {
+        codeRes = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, cancellable: true, title: "Connect Claude (Pro/Max)" },
+          async (progress, token) => {
+            await vscode.env.openExternal(vscode.Uri.parse(begun.authUrl));
+            progress.report({
+              message: server
+                ? "Approve access in your browser — you'll return here automatically. Cancel to paste the code instead."
+                : "Approve access in your browser, then paste the code.",
+            });
+            if (!server) return undefined;
+            token.onCancellationRequested(() => server!.cancel());
+            return await server.waitForCode();
+          },
+        );
+      } finally {
+        server?.close();
+      }
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Claude sign-in failed: ${(err as Error).message}` });
+      return;
+    }
+
+    // No automatic redirect (cancelled, remote browser, or port busy) → paste it.
+    if (!codeRes) {
+      const pasted = (
+        await vscode.window.showInputBox({
+          prompt: "Paste the authorization code or the full redirect URL from your browser",
+          ignoreFocusOut: true,
+        })
+      )?.trim();
+      if (!pasted) return; // cancelled
+      const parsed = parseAuthorizationInput(pasted);
+      if (!parsed.code) {
+        this.post({ type: "notify", level: "error", message: "No authorization code found in the pasted value." });
+        return;
+      }
+      if (parsed.state && parsed.state !== verifier) {
+        this.post({ type: "notify", level: "error", message: "OAuth state mismatch — please retry the sign-in." });
+        return;
+      }
+      codeRes = { code: parsed.code, state: parsed.state ?? verifier };
+    }
+
+    let creds: AnthropicOAuthCredentials;
+    try {
+      creds = await completeAnthropicLogin({ code: codeRes.code, state: codeRes.state ?? verifier, verifier });
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Claude sign-in failed: ${(err as Error).message}` });
+      return;
+    }
+
+    try {
+      writeAnthropicOAuth(creds);
+    } catch (err) {
+      this.post({ type: "notify", level: "error", message: `Could not write auth.json: ${(err as Error).message}` });
+      return;
+    }
+    this.post({ type: "notify", level: "info", message: "Connected to Claude (Pro/Max). Restarting agent…" });
+    await this.restartAgent();
   }
 
   // ── viewer ────────────────────────────────────────────────────────────────
@@ -532,12 +740,21 @@ export class ChronosPanel {
           if (result && !result.cancelled) {
             this.currentSourceDir = undefined;
             this.currentSourceName = undefined;
+            // Re-arm the Data-tab refresh guard so re-selecting the same source
+            // (or restoring it on resume) repopulates the (now-cleared) Data tab.
+            this.lastDataSource = undefined;
             this.post({ type: "history", messages: [] });
+            // The new session has no source bound — clear the viewer + dropdown so
+            // the display matches (don't leave the previous source showing).
+            this.post({ type: "viewer/clearSource" });
             await this.refreshState();
             this.postSessions();
           }
           break;
         }
+        case "login":
+          await this.promptLogin();
+          break;
         case "resumeSession": {
           try {
             const result = await this.rpc?.request<{ cancelled: boolean }>(

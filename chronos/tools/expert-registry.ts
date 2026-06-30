@@ -1,4 +1,4 @@
-import type { Api, Message, Model } from "@mariozechner/pi-ai";
+import type { Api, Message, Model } from "@earendil-works/pi-ai";
 
 /**
  * Registry of expert sessions keyed by task ID.

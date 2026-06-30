@@ -8,7 +8,7 @@ An AI agent that collaborates with historians to extract structured datasets fro
 
 - VS Code v1.110+
 - [Node.js](https://nodejs.org/) v18+ — required by the underlying `pi` agent the extension installs on first run
-- A [Gemini API key](https://aistudio.google.com/apikey) for the vision model
+- An API key for an AI provider with a vision-capable model (Anthropic, Google, OpenAI, …) — you connect it from the panel on first run
 
 ## Installation
 
@@ -16,9 +16,9 @@ Install **Chronos — The AI Historian** from the Extensions view, then run any 
 
 ## Getting started
 
-1. **Chronos: Init Workspace** — open an empty folder and run this to create the workspace structure and set your Gemini API key.
+1. **Chronos: Init Workspace** — open an empty folder and run this to create the workspace structure.
 2. **Chronos: Import Sources** — add PDFs, images (PNG/JPG/TIFF/BMP), or text files. PDFs are converted to page images; imports are crash-safe and resumable.
-3. **Chronos: Start Agent Session** — open the page viewer + chat and begin extracting data.
+3. **Chronos: Start Agent Session** — open the page viewer + chat. Click **Log in** in the header (or run **Chronos: Connect AI Provider**) to connect a provider — sign in with a **Claude Pro/Max subscription** (OAuth) or paste an **API key** for any provider — then begin extracting data.
 
 ## Documentation
 

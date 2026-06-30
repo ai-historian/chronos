@@ -1,6 +1,13 @@
 import { readFileSync, existsSync } from "node:fs";
-import { complete, type ImageContent, type Message, type TextContent, type UserMessage } from "@mariozechner/pi-ai";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import {
+  complete,
+  type ImageContent,
+  type Message,
+  type TextContent,
+  type ToolCall,
+  type UserMessage,
+} from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { pageIdToPath } from "../utils/page-files.js";
 import type { ExpertRegistry, ExpertSession } from "./expert-registry.js";
 import { newTaskId } from "./expert-registry.js";
@@ -8,9 +15,44 @@ import type { SourceContext } from "./source-context.js";
 import { requireSource } from "./source-context.js";
 import { resolveExpertModel } from "../utils/resolve-model.js";
 import { cropImageToBase64, type Bbox } from "../utils/crop-image.js";
-import { appendExpertTurn, type PersistedExpert } from "../utils/expert-store.js";
+import { appendExpertTurn, type PersistedExpert, type PersistedStep } from "../utils/expert-store.js";
+import {
+  buildExpertTools,
+  executeExpertTool,
+  rehydrateToolResult,
+  type ExpertCapability,
+} from "./expert-tools.js";
 
-export const DEFAULT_EXPERT_MODEL = "google/gemini-3-flash-preview";
+// Bound the per-turn agentic loop so a confused expert can't spin on tool calls.
+const MAX_EXPERT_TOOL_CALLS = 8;
+
+const CAP_DESCRIPTION: Record<ExpertCapability, string> = {
+  bash: "run shell commands",
+  write: "create files",
+  edit: "modify files",
+};
+
+/**
+ * Ask the user to approve elevating an expert beyond read-only. Experts are
+ * read-only by default so their work stays auditable; bash/write/edit are off
+ * unless the orchestrator requests them AND the user approves here. Always
+ * prompts (it is the oversight gate). Returns true if approved; `scope`
+ * describes who gets the grant (e.g. "this expert", "all 12 experts in this batch").
+ */
+export async function confirmExpertGrant(
+  extCtx: ExtensionContext,
+  caps: ExpertCapability[],
+  scope: string,
+): Promise<boolean> {
+  if (caps.length === 0) return true;
+  const list = caps.map((c) => `${c} (${CAP_DESCRIPTION[c]})`).join(", ");
+  return extCtx.ui.confirm(
+    "Grant expert elevated access?",
+    `The agent wants to let ${scope} go beyond read-only — ${list} — in the workspace. ` +
+      `Expert subagents are read-only by default so their work stays auditable; this is normally ` +
+      `disabled for oversight and safety. Allow for this call?`,
+  );
+}
 
 export function modelSpec(m: { provider: string; id: string }): string {
   return `${m.provider}/${m.id}`;
@@ -34,20 +76,53 @@ export interface ExpertTurnInput {
   /** Continue an existing session; omit to spawn a new one. */
   taskId?: string;
   prompt: string;
-  /** provider/model-id; defaults to the session's model on follow-up, else DEFAULT_EXPERT_MODEL. */
+  /** provider/model-id; defaults to the session's model on follow-up, else the orchestrator's current model. */
   model?: string;
   /** Attach this page's image to the message. */
   pageId?: number;
   bbox?: Bbox;
+  /** Abort the (multi-call) agentic loop when the user cancels. */
+  signal?: AbortSignal;
+  /**
+   * Elevated capabilities the orchestrator granted this expert (bash/write/edit).
+   * Read-only tools are always available; these are added only when present, and
+   * the caller is responsible for getting the user's confirmation first.
+   */
+  grantedCaps?: ExpertCapability[];
+}
+
+/** One tool the expert invoked during a turn — surfaced to the UI for oversight. */
+export interface ExpertToolUse {
+  tool: string;
+  pageId?: number;
+  bbox?: Bbox;
+  /** Short label for non-page tools (command run, file path, search term). */
+  detail?: string;
+  isError: boolean;
 }
 
 export type ExpertTurnResult =
-  | { ok: true; taskId: string; model: string; text: string; cost: number | undefined; pageId: number | null }
+  | {
+      ok: true;
+      taskId: string;
+      model: string;
+      text: string;
+      cost: number | undefined;
+      pageId: number | null;
+      /** view_region/view_page calls the expert made this turn (in order). */
+      toolUses: ExpertToolUse[];
+    }
   | { ok: false; error: string; taskId?: string };
+
+function isToolCall(c: { type: string }): c is ToolCall {
+  return c.type === "toolCall";
+}
 
 /**
  * Run one expert turn: resolve the model, build the (optionally image-bearing)
- * user message, call the model, and persist the exchange in the registry.
+ * user message, then run an agentic loop — the model may call `view_region` /
+ * `view_page` to pull in more imagery before answering. The full exchange
+ * (intermediate tool calls + results) is kept in the session and persisted.
  * Shared by the `task` tool (single, formatted) and `task_batch` (many).
  */
 export async function runExpertTurn(
@@ -88,10 +163,19 @@ export async function runExpertTurn(
       return { ok: false, taskId, error: (e as Error).message };
     }
     turnSourceDir = sourceDir;
+  } else if (sourceCtx.sourceDir) {
+    // No image attached, but a source is active — let the expert's tools reach it.
+    turnSourceDir = sourceCtx.sourceDir;
   }
   content.push({ type: "text", text: input.prompt });
 
-  const fallback = session ? modelSpec(session.model) : DEFAULT_EXPERT_MODEL;
+  // Default to the session's model on follow-up, else the orchestrator's current
+  // model (whatever the user has selected/authed in pi) — no provider is baked in.
+  const fallback = session
+    ? modelSpec(session.model)
+    : extCtx.model
+      ? modelSpec(extCtx.model)
+      : undefined;
   const resolved = await resolveExpertModel(input.model, extCtx.modelRegistry, fallback, pageId !== null);
   if (!resolved.ok) {
     return { ok: false, taskId, error: resolved.error };
@@ -107,47 +191,124 @@ export async function runExpertTurn(
 
   const userMessage: UserMessage = { role: "user", content, timestamp: Date.now() };
 
-  const response = await complete(
-    resolved.model,
-    { systemPrompt: pageExpertPrompt, messages: [...session.messages, userMessage] },
-    { apiKey: resolved.apiKey, headers: resolved.headers },
-  );
-  if (response.stopReason === "error") {
-    return {
-      ok: false,
-      taskId,
-      error: `Expert model error (${modelSpec(resolved.model)}): ${response.errorMessage ?? "unknown error"}`,
-    };
-  }
-  session.messages.push(userMessage, response);
+  // ── Agentic loop ─────────────────────────────────────────────────────────
+  // turnMessages accumulates everything this turn appends after the prior
+  // session history: the user message, intermediate tool calls/results, and the
+  // final answer. steps captures the intermediate exchange for persistence.
+  const turnMessages: Message[] = [userMessage];
+  const steps: PersistedStep[] = [];
+  let currentPageId: number | null = pageId;
+  let toolCallCount = 0;
+  // Read-only tools are always offered; the image tools only when the model can
+  // consume images; bash/write/edit only for capabilities the orchestrator
+  // granted (and the user approved upstream).
+  const granted = new Set<ExpertCapability>(input.grantedCaps ?? []);
+  const expertToolDefs = buildExpertTools({
+    vision: resolved.model.input.includes("image"),
+    granted: [...granted],
+  });
+  let toolsEnabled = expertToolDefs.length > 0;
+  let totalCost = 0;
+  let finalResponse;
 
-  const text = response.content
+  for (;;) {
+    if (input.signal?.aborted) {
+      return { ok: false, taskId, error: "Expert turn aborted." };
+    }
+    const response = await complete(
+      resolved.model,
+      {
+        systemPrompt: pageExpertPrompt,
+        messages: [...session.messages, ...turnMessages],
+        tools: toolsEnabled ? expertToolDefs : undefined,
+      },
+      { apiKey: resolved.apiKey, headers: resolved.headers, signal: input.signal },
+    );
+    if (response.stopReason === "error") {
+      return {
+        ok: false,
+        taskId,
+        error: `Expert model error (${modelSpec(resolved.model)}): ${response.errorMessage ?? "unknown error"}`,
+      };
+    }
+    // A cancel that lands while complete() is in flight resolves with an
+    // "aborted" response rather than throwing. Treat it as a failed turn so it is
+    // neither committed to session.messages nor persisted, and the callers don't
+    // write its empty/partial text to an output_file as if it were a real answer.
+    if (input.signal?.aborted || response.stopReason === "aborted") {
+      return { ok: false, taskId, error: "Expert turn aborted." };
+    }
+    turnMessages.push(response);
+    finalResponse = response;
+    totalCost += response.usage?.cost?.total ?? 0;
+
+    const toolCalls = toolsEnabled ? response.content.filter(isToolCall) : [];
+    if (response.stopReason !== "toolUse" || toolCalls.length === 0) break;
+
+    // Intermediate assistant turn — record it, then run each requested tool.
+    steps.push({ kind: "assistant", message: response });
+    for (const call of toolCalls) {
+      toolCallCount++;
+      const outcome = await executeExpertTool(call, {
+        sourceDir: turnSourceDir,
+        currentPageId,
+        cwd: extCtx.cwd,
+        granted,
+      });
+      turnMessages.push(outcome.message);
+      steps.push({ kind: "toolResult", toolResult: outcome.persist });
+      if (outcome.viewedPageId !== undefined) currentPageId = outcome.viewedPageId;
+    }
+    // Spent the budget — drop tools so the next completion must answer in text.
+    if (toolCallCount >= MAX_EXPERT_TOOL_CALLS) toolsEnabled = false;
+  }
+
+  session.messages.push(...turnMessages);
+
+  const text = finalResponse.content
     .filter((c): c is { type: "text"; text: string } => c.type === "text")
     .map((c) => c.text)
     .join("");
 
   // Persist this turn so the expert survives an agent restart. Compact: prompt +
-  // provenance + the text-only response; the page image is rehydrated from disk
-  // on restore. Best-effort — appendExpertTurn never throws.
+  // provenance + the (text-only) agentic exchange; page images are re-cropped
+  // from disk on restore. Best-effort — appendExpertTurn never throws.
   appendExpertTurn(extCtx.cwd, extCtx.sessionManager.getSessionId(), taskId!, modelSpec(resolved.model), {
     prompt: input.prompt,
     pageId: pageId ?? undefined,
     bbox: input.bbox,
     sourceDir: turnSourceDir,
-    response,
+    steps: steps.length > 0 ? steps : undefined,
+    response: finalResponse,
   });
 
-  const cost = response.usage?.cost;
-  const costTotal = cost ? cost.input + cost.output + cost.cacheRead : undefined;
+  // Surface the expert's tool calls (page/region it pulled in) for UI oversight.
+  const toolUses: ExpertToolUse[] = steps
+    .filter((s): s is Extract<PersistedStep, { kind: "toolResult" }> => s.kind === "toolResult")
+    .map((s) => ({
+      tool: s.toolResult.toolName,
+      pageId: s.toolResult.image?.pageId,
+      bbox: s.toolResult.image?.bbox,
+      detail: s.toolResult.detail,
+      isError: s.toolResult.isError,
+    }));
 
-  return { ok: true, taskId: taskId!, model: modelSpec(resolved.model), text, cost: costTotal, pageId };
+  return {
+    ok: true,
+    taskId: taskId!,
+    model: modelSpec(resolved.model),
+    text,
+    cost: totalCost > 0 ? totalCost : undefined,
+    pageId,
+    toolUses,
+  };
 }
 
 /**
  * Rebuild in-memory expert sessions from their persisted turn-logs, re-cropping
- * page images from disk. Skips a task whose model can no longer be resolved
- * (e.g. missing API key); restores a turn text-only if its source page is gone.
- * Mutates the registry in place (it's captured by reference by the tools).
+ * page images (and any tool-driven zoom crops) from disk. Skips a task whose
+ * model can no longer be resolved (e.g. missing API key); restores a turn
+ * text-only if its source page is gone. Mutates the registry in place.
  */
 export async function restoreExpertSessions(
   registry: ExpertRegistry,
@@ -168,9 +329,18 @@ export async function restoreExpertSessions(
       }
       content.push({ type: "text", text: turn.prompt });
       const userMessage: UserMessage = { role: "user", content, timestamp: turn.response.timestamp };
-      messages.push(userMessage, turn.response);
+      messages.push(userMessage);
+      // Replay the agentic exchange (assistant tool calls + re-hydrated results).
+      for (const step of turn.steps ?? []) {
+        if (step.kind === "assistant") {
+          messages.push(step.message);
+        } else {
+          messages.push(await rehydrateToolResult(step.toolResult));
+        }
+      }
+      messages.push(turn.response);
     }
-    const resolved = await resolveExpertModel(rec.modelSpec, extCtx.modelRegistry, DEFAULT_EXPERT_MODEL, false);
+    const resolved = await resolveExpertModel(rec.modelSpec, extCtx.modelRegistry, undefined, false);
     if (!resolved.ok) continue;
     registry.sessions.set(rec.taskId, { messages, model: resolved.model });
     const n = parseInt(rec.taskId.replace(/^task-/, ""), 10);

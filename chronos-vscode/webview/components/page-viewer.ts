@@ -89,6 +89,19 @@ export class ChronosPageViewer extends LitElement {
     this.lastPage = lastPage;
   }
 
+  /** Reset to the empty state (no source bound) — e.g. when a new session starts.
+   *  Zoom is left alone: it's a UI preference, not source state. */
+  clearSource(): void {
+    this.textView = null;
+    this.imageUri = "";
+    this.pageId = 1;
+    this.sourceName = "";
+    this.firstPage = 1;
+    this.lastPage = 1;
+    this.bbox = null;
+    this.showingCrop = false;
+  }
+
   private get img(): HTMLImageElement | null {
     return this.querySelector<HTMLImageElement>("#pv-image");
   }

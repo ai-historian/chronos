@@ -1,12 +1,13 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
-import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ExpertRegistry } from "./expert-registry.js";
 import type { SourceContext } from "./source-context.js";
 import { requireSourceDataDir } from "./source-context.js";
 import type { ToolText } from "../utils/tool-loader.js";
-import { runExpertTurn, DEFAULT_EXPERT_MODEL, type ExpertTurnInput } from "./expert-turn.js";
+import { runExpertTurn, confirmExpertGrant, type ExpertTurnInput, type ExpertToolUse } from "./expert-turn.js";
+import type { ExpertCapability } from "./expert-tools.js";
 import { type Bbox } from "../utils/crop-image.js";
 
 interface ExpertEntry {
@@ -17,6 +18,7 @@ interface ExpertEntry {
   file?: string;
   error?: string;
   cost?: number;
+  toolUses?: ExpertToolUse[];
 }
 
 const taskBatchParams = Type.Object({
@@ -29,8 +31,9 @@ const taskBatchParams = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        `Model as provider/model-id (e.g. "google/gemini-3.1-pro-preview"). ` +
-        `Default: ${DEFAULT_EXPERT_MODEL}. An unknown model errors with the list of available models.`,
+        `Model as provider/model-id (e.g. "anthropic/claude-opus-4-8"). ` +
+        `Default: the orchestrator's current model. Any model pi has auth for works; ` +
+        `an unknown model errors with the list of available models.`,
     }),
   ),
   output_file: Type.Optional(
@@ -59,6 +62,15 @@ const taskBatchParams = Type.Object({
       },
       { description: "Crop region in normalized coordinates (0–1). Applied to every page before sending to the model." }
     )
+  ),
+  grant: Type.Optional(
+    Type.Array(Type.Union([Type.Literal("bash"), Type.Literal("write"), Type.Literal("edit")]), {
+      description:
+        'Elevate EVERY expert in this batch beyond read-only: "bash" (run shell commands), "write" ' +
+        '(create files), "edit" (modify files). REQUIRES the user\'s confirmation (asked once for the whole ' +
+        "batch) — experts are read-only by default so their work stays auditable; normally disabled for " +
+        "oversight and safety. Omit for normal read-only experts.",
+    }),
   ),
 });
 
@@ -91,11 +103,28 @@ export function createTaskBatchTool(
         return { content: [{ type: "text", text: "No page IDs provided." }], details: {} };
       }
 
+      // Elevated capabilities are confirmed ONCE for the whole cohort, before any
+      // expert runs. Denial aborts the batch.
+      const grant: ExpertCapability[] = params.grant ?? [];
+      if (grant.length > 0 && !(await confirmExpertGrant(extCtx, grant, `all ${pageIds.length} experts in this batch`))) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `User declined to grant elevated access (${grant.join(", ")}); no experts were run. ` +
+                "Re-issue without `grant` to run read-only, or ask the user to approve.",
+            },
+          ],
+          details: {},
+        };
+      }
+
       const experts: ExpertEntry[] = [];
-      let resolvedModel = params.model ?? DEFAULT_EXPERT_MODEL;
+      let resolvedModel = params.model ?? "(orchestrator default)";
 
       const runOne = async (pageId: number): Promise<ExpertEntry> => {
-        const input: ExpertTurnInput = { prompt: params.prompt, model: params.model, pageId, bbox };
+        const input: ExpertTurnInput = { prompt: params.prompt, model: params.model, pageId, bbox, signal, grantedCaps: grant };
         const result = await runExpertTurn(registry, sourceCtx, pageExpertPrompt, extCtx, input);
         if (!result.ok) {
           return { page_id: pageId, status: "error", error: result.error };
@@ -104,9 +133,9 @@ export function createTaskBatchTool(
         if (outputFileTemplate) {
           const filename = outputFileTemplate.replace("{page_id}", String(pageId).padStart(4, "0"));
           writeFileSync(join(outputDir, filename), result.text || "(empty response)", "utf-8");
-          return { taskId: result.taskId, page_id: pageId, status: "ok", file: filename, cost: result.cost };
+          return { taskId: result.taskId, page_id: pageId, status: "ok", file: filename, cost: result.cost, toolUses: result.toolUses };
         }
-        return { taskId: result.taskId, page_id: pageId, status: "ok", response: result.text || "(empty response)", cost: result.cost };
+        return { taskId: result.taskId, page_id: pageId, status: "ok", response: result.text || "(empty response)", cost: result.cost, toolUses: result.toolUses };
       };
 
       // Concurrency-limited worker pool.

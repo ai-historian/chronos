@@ -19,7 +19,7 @@
 │   └── <source-name>.md     # Per-source findings
 ├── sessions/                 # Conversation history (auto-generated)
 └── .chronos/
-    └── .env                  # GEMINI_API_KEY
+    └── .env                  # provider API keys (e.g. ANTHROPIC_API_KEY, GEMINI_API_KEY)
 ```
 
 ## Tools
@@ -40,15 +40,44 @@ Standard file tools (`read`, `write`, `edit`, `grep`, `find`, `ls`) are also ava
 ### Expert models
 
 The `task` and `task_batch` tools accept any model pi has configured auth for, as
-`provider/model-id` (default: `google/gemini-3-flash-preview`), e.g.:
+`provider/model-id`. If you omit it, they default to the model selected in the panel
+header (the orchestrator's current model) — no provider is hardcoded. Examples:
 
+- `anthropic/claude-opus-4-8`
 - `google/gemini-3-flash-preview`
 - `google/gemini-3.1-pro-preview`
-- `anthropic/claude-opus-4-8`
+- `openai/gpt-...`
 
-An unknown model name errors with the list of available models.
+The model must be vision-capable when a page image is attached. An unknown model name
+errors with the list of available models.
 
-Each expert keeps its own conversation (addressed by the `task_id` the tool returns), so you can ask follow-ups without re-sending the page image. These conversations are persisted per session under `.chronos/expert-sessions/`, so `task_id` follow-ups keep working after the agent restarts or a session is resumed. (Stored compactly — page images are re-read from disk on restore, not duplicated.)
+**Choosing a model** (recommendation, not a requirement): a fast/cheap vision model such
+as `google/gemini-3-flash-preview` is a good default for routine pages; reach for a
+stronger one (e.g. `google/gemini-3.1-pro-preview` or `anthropic/claude-opus-4-8`) on
+dense tables, marginalia, or faint/damaged ink. Experts can also zoom in themselves (see
+`view_region` / `view_page` below), which often matters more than raw model size.
+
+Each expert keeps its own conversation (addressed by the `task_id` the tool returns), so you can ask follow-ups without re-sending the page image. These conversations are persisted per session under `.chronos/expert-sessions/`, so `task_id` follow-ups keep working after the agent restarts or a session is resumed. (Stored compactly — page images, including any tool-driven zoom crops, are re-read from disk on restore, not duplicated.)
+
+#### Expert self-direction
+
+Experts aren't limited to the single (optionally pre-cropped) image the orchestrator hands them — they run a bounded agentic loop (capped at 8 tool calls/turn). **By default they are read-only:**
+
+- **`view_region(bbox, [page_id])`** — crop a region of a page at full resolution (dense table, marginal note, faint ink). Omits `page_id` to zoom into the page in view.
+- **`view_page(page_id)`** — load another full page from the same source.
+- **`read_file(path)`** / **`list_dir([path])`** / **`grep(pattern, [path])`** — read and search the workspace (schemas, memory, prior outputs). Scoped to the workspace root.
+
+So you don't have to predict the right crop up front — pass the page and let the expert zoom and cross-reference where it needs to.
+
+#### Granting elevated capabilities (off by default)
+
+Experts **cannot run commands or change files** unless the orchestrator passes `grant` on the `task`/`task_batch` call:
+
+- `grant: ["bash"]` — `bash(command)` (runs in the workspace dir)
+- `grant: ["write"]` — `write_file(path, content)`
+- `grant: ["edit"]` — `edit_file(path, old_text, new_text)`
+
+This path is deliberately gated for oversight and safety: requesting a grant triggers a **user confirmation** before any expert runs (once per `task` call, or once for a whole `task_batch` cohort), and denial aborts the call. Granted file operations are confined to the workspace. Whatever the expert does — every region viewed, file read/written, command run — is surfaced in the expert drawer (the "examined" steps; region/page steps are clickable, elevated actions are flagged), so the work stays auditable. Leave `grant` off unless a task genuinely needs the expert to act on its own.
 
 ### Bounding box cropping
 
@@ -70,9 +99,9 @@ To make each row traceable to its source page, include any of these reserved key
 
 | Key | Type | Meaning |
 |-----|------|---------|
-| `chronos_page` | integer | Page the record was read from (same numbering as `show_page` / `[view p.N]`). |
-| `chronos_bbox` | `[x, y, w, h]` (or `{x,y,w,h}`) | *Optional.* Region on that page, normalized 0–1. |
-| `chronos_source` | string | *Optional.* Workspace-relative source path (e.g. `sources/Frankfurt_1864`) when the row is from a different source than the one in view. |
+| `chronos_page` | integer **or list** | Page the record was read from (same numbering as `show_page` / `[view p.N]`). |
+| `chronos_bbox` | `[x, y, w, h]` / `{x,y,w,h}` **or list** | *Optional.* Region on that page, normalized 0–1. |
+| `chronos_source` | string **or list** | *Optional.* Workspace-relative source path (e.g. `sources/Frankfurt_1864`) when the row is from a different source than the one in view. |
 
 Example (`data/Frankfurt_1864/entries.json`):
 
@@ -82,6 +111,27 @@ Example (`data/Frankfurt_1864/entries.json`):
   { "surname": "Schmidt", "trade": "smith", "chronos_page": 42, "chronos_bbox": [0.10, 0.38, 0.80, 0.05] }
 ]
 ```
+
+#### Multiple references per row
+
+A row can cite **more than one** source location — a value split across two pages, a figure assembled from several regions, or a fact corroborated by a marginal note. Pass the reserved keys as **parallel lists** and the Data tab renders one citation chip per reference, each linking to its own page/region:
+
+```json
+[
+  {
+    "name": "Anna Weber",
+    "chronos_page": [42, 43],
+    "chronos_bbox": [[0.10, 0.90, 0.80, 0.06], [0.10, 0.04, 0.80, 0.06]]
+  },
+  {
+    "name": "Karl Vogt",
+    "chronos_page": 42,
+    "chronos_bbox": [[0.10, 0.32, 0.80, 0.05], [0.55, 0.32, 0.40, 0.05]]
+  }
+]
+```
+
+The lists align by index. A scalar is treated as a single-element list (so existing single-reference outputs are unchanged), and a length-1 list **broadcasts** — e.g. one `chronos_source` shared across several pages, or several `chronos_bbox` regions on a single `chronos_page` (the second row above). A reference must resolve to a page id.
 
 The keys are a recommendation — outputs without them still appear in the Data tab, just without click-to-source.
 

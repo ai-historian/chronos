@@ -57,6 +57,15 @@ in the Data tab (with a "show full page" option):
 
 Example row: `{ "surname": "Müller", "trade": "baker", "chronos_page": 42, "chronos_bbox": [0.1, 0.32, 0.8, 0.05] }`
 
+**Multiple references per row.** When a single row draws on more than one place — a value
+split across two pages, or assembled from several regions of one page — make any of these keys
+a **list**; they align by index and the Data tab renders one citation per reference. A scalar
+is treated as a single reference, and a length-1 list broadcasts (one `chronos_source` shared
+across pages, or several `chronos_bbox` regions on one `chronos_page`). Every reference must
+have a page.
+- Two pages: `{ "name": "Anna Weber", "chronos_page": [42, 43], "chronos_bbox": [[0.1, 0.9, 0.8, 0.06], [0.1, 0.04, 0.8, 0.06]] }`
+- Two regions of one page: `{ "name": "Karl Vogt", "chronos_page": 42, "chronos_bbox": [[0.1, 0.32, 0.8, 0.05], [0.55, 0.32, 0.4, 0.05]] }`
+
 These keys are a recommendation, not a requirement — free-form text/CSV files still show in
 the Data tab (as text). Always write outputs under `{{sourceDataDir}}/`.
 
@@ -77,11 +86,14 @@ the Data tab (as text). Always write outputs under `{{sourceDataDir}}/`.
   model in a persistent conversation. Without `task_id` it spawns a new expert and the result
   ends with a `task_id:` line; pass that id back to ask the same expert follow-up questions
   ("What did that abbreviation mean?") without re-sending earlier images. Multiple experts can
-  be active concurrently, each with its own history. `page_id` optionally attaches a page image
+  be active concurrently, each with its own history. The expert self-directs and is **read-only by
+  default** — `view_region` (zoom), `view_page` (load another page), `read_file`, `list_dir`, `grep`.
+  Pass `grant` (e.g. `["bash"]`, `["write","edit"]`) to also let it run commands / change files; this
+  asks the user for confirmation and is off by default for oversight, so only request it when the task
+  truly needs it. `page_id` optionally attaches a page image
   (on spawn or follow-up — requires an active source); omit it for text-only messages.
-  `model` accepts any configured model as `provider/model-id` — default
-  `google/gemini-3-flash-preview`; pick a stronger model (e.g. `google/gemini-3.1-pro-preview`)
-  for difficult pages.
+  `model` accepts any model pi has auth for as `provider/model-id`; it defaults to the
+  orchestrator's current model. Pass `model` to use a different one for a hard page.
 - **`task_batch(page_ids, prompt, [model], [output_file], [concurrency], [bbox])`** —
   the batch version of `task`: spawns one expert per page in parallel. Each page becomes its
   own persistent session with its own `task_id`, so you can follow up on any single page

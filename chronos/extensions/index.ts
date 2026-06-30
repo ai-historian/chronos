@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,8 @@ import { listPageIds } from "../utils/page-files.js";
 import { discoverSources } from "../utils/source-discovery.js";
 import { ensureWorkspace } from "../utils/workspace.js";
 import { saveSessionSource, loadSessionSource } from "../utils/session-source-store.js";
+import { getNamedPromptCount, saveSessionName } from "../utils/session-name-store.js";
+import { generateSessionTitle } from "../utils/session-namer.js";
 import { connectHttp, sendToExtension, disconnectHttp } from "../http/http-client.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -171,25 +173,26 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     ensureWorkspace(ctx.cwd);
     // .chronos/.env holds workspace API keys (e.g. GEMINI_API_KEY) — the
     // expert models read them from the environment (and we need them to
     // re-resolve expert models when restoring sessions).
     dotenvConfig({ path: join(ctx.cwd, ".chronos", ".env") });
+    // session_start fires for the initial startup AND every switch/resume/fork
+    // (0.79 folded the former session_switch event into this, distinguished by
+    // event.reason). On a switch the in-memory source + experts belong to the
+    // previous session — clear them before restoring the target session's state.
+    if (event.reason !== "startup") {
+      sourceCtx.sourceDir = null;
+      sourceCtx.sourceName = null;
+      sourceCtx.sourceDataDir = null;
+      expertRegistry.sessions.clear();
+      expertRegistry.nextId = 1;
+    }
+    // session_shutdown clears the viewer HTTP flag before each switch, so
+    // (re)connect on every start. connectHttp is idempotent.
     connectHttp();
-    restoreSource(ctx);
-    await restoreExperts(ctx);
-  });
-
-  // Switching/resuming a session swaps the active source and experts: clear the
-  // in-memory state, then restore whatever the target session had (no-op if none).
-  pi.on("session_switch", async (_event, ctx) => {
-    sourceCtx.sourceDir = null;
-    sourceCtx.sourceName = null;
-    sourceCtx.sourceDataDir = null;
-    expertRegistry.sessions.clear();
-    expertRegistry.nextId = 1;
     restoreSource(ctx);
     await restoreExperts(ctx);
   });
@@ -198,9 +201,17 @@ export default function (pi: ExtensionAPI) {
     disconnectHttp();
   });
 
-  pi.on("session_directory", async (event) => {
-    return { sessionDir: join(event.cwd, "sessions") };
+  // Auto-generate a short session title from the user's prompts (once, cached in
+  // a sidecar) so the history list shows something better than the truncated
+  // first message. Best-effort and non-blocking: fire-and-forget so it never
+  // delays the next prompt, and silently keeps the fallback on any failure.
+  pi.on("agent_end", async (_event, ctx) => {
+    void maybeNameSession(ctx);
   });
+
+  // (No session_directory hook: pi >= 0.7x dropped it. Session storage is
+  // redirected via the PI_CODING_AGENT_SESSION_DIR env var, set by the VS Code
+  // extension when launching pi.)
 
   // ── System prompt injection (every turn) ───────────────────────────────
 
@@ -241,6 +252,67 @@ function applySource(sourceCtx: SourceContext, workspaceDir: string, sourcePath:
   sourceCtx.sourceName = sourceName;
   sourceCtx.sourceDataDir = sourceDataDir;
   return true;
+}
+
+// ── Session auto-naming ─────────────────────────────────────────────────────
+
+function textOfMessageContent(content: unknown): string | undefined {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const parts = content
+      .filter((b): b is { type: "text"; text: string } => (b as any)?.type === "text")
+      .map((b) => b.text);
+    if (parts.length) return parts.join(" ");
+  }
+  return undefined;
+}
+
+// Genuine user prompts from a session, in order. Skips the synthetic
+// "Source selected: …" follow-up the /select-source command injects.
+function userPromptsFromSession(entries: { type: string; [k: string]: any }[]): string[] {
+  const prompts: string[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "message") continue;
+    const message = entry.message;
+    if (!message || message.role !== "user") continue;
+    const text = textOfMessageContent(message.content)?.trim();
+    if (!text || text.startsWith("Source selected:")) continue;
+    prompts.push(text);
+  }
+  return prompts;
+}
+
+// Refine the title over the first few prompts, then lock it, so a session named
+// after one terse opener still gets a better label as its task takes shape.
+const NAMING_PROMPT_CAP = 3;
+// In-process guard so two near-simultaneous agent_end events don't both fire a
+// generation before either has written its result.
+const namingInFlight = new Set<string>();
+
+// Generate-and-cache a display name for the current session from its user
+// prompts, unless the user named it explicitly or it's already named from at
+// least this many prompts. Never throws.
+async function maybeNameSession(ctx: ExtensionContext): Promise<void> {
+  try {
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (!sessionId) return;
+    if (ctx.sessionManager.getSessionName()) return; // user set a name explicitly
+    if (namingInFlight.has(sessionId)) return; // a generation is already running
+    const prompts = userPromptsFromSession(ctx.sessionManager.getEntries());
+    if (prompts.length === 0) return;
+    const target = Math.min(prompts.length, NAMING_PROMPT_CAP);
+    if (getNamedPromptCount(ctx.cwd, sessionId) >= target) return; // already named from enough prompts
+
+    namingInFlight.add(sessionId);
+    try {
+      const title = await generateSessionTitle(ctx.modelRegistry, prompts, ctx.model);
+      if (title) saveSessionName(ctx.cwd, sessionId, title, target);
+    } finally {
+      namingInFlight.delete(sessionId);
+    }
+  } catch (err) {
+    console.warn("[chronos] session auto-name failed:", (err as Error).message);
+  }
 }
 
 // ── System prompt builder ──────────────────────────────────────────────

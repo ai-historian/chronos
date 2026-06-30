@@ -155,6 +155,57 @@ exports.run = async function run() {
   });
   check("re-open icon on a tool entry restores the viewer", true);
 
+  // 7. Multi-reference provenance (#5): a row may cite several (page, bbox)
+  //    locations via list-valued reserved keys; each should yield a citation.
+  writeFileSync(
+    join(dataDir, "multi.json"),
+    JSON.stringify(
+      [
+        // two pages, two regions, one shared source — should parse as 2 refs
+        { name: "split entry", chronos_page: [1, 1], chronos_bbox: [[0.1, 0.1, 0.4, 0.1], [0.1, 0.3, 0.4, 0.1]], chronos_source: "TestSource" },
+        // scalar (backward compatible) — 1 ref
+        { name: "single", chronos_page: 1, chronos_bbox: [0.2, 0.2, 0.3, 0.1] },
+      ],
+      null,
+      2,
+    ),
+  );
+  api.chronosTest.invoke("selectDataFile", "multi.json");
+  await waitFor("multi-reference row parsed", async () => {
+    const s = await dump();
+    const counts = s?.data?.provenanceCounts || [];
+    return (
+      s?.data?.selected === "multi.json" &&
+      s?.data?.rowCount === 2 &&
+      counts[0] === 2 &&
+      counts[1] === 1
+    );
+  });
+  check("data viewer renders multiple references per row", true);
+
+  // 8. New session (#10): the viewer + source dropdown reset to "nothing
+  //    selected" so the display matches the (unbound) selection.
+  api.chronosTest.invoke("newSession");
+  await waitFor("new-session clears source/viewer", async () => {
+    const s = await dump();
+    return s?.currentSource === "" && (s?.data?.sourceName ?? "") === "" && (s?.viewer?.sourceName ?? "") === "";
+  });
+  check("new session clears the viewer + source dropdown", true);
+
+  // 9. Expert oversight (#11): the task/task_batch drawer surfaces the expert's
+  //    own view_region/view_page calls as clickable viewer links.
+  api.chronosTest.invoke("injectExpertTools");
+  await waitFor("expert drawer shows tool-use oversight", async () => {
+    const s = await dump();
+    return (
+      s?.chat?.expertOpen === "task-1" &&
+      s?.chat?.expertToolLinks === 2 && // view_region + view_page → clickable links
+      s?.chat?.expertToolChips === 4 && // + grep + bash chips
+      s?.chat?.expertElevatedChips === 1 // bash flagged as elevated
+    );
+  });
+  check("expert drawer surfaces tool-use viewer links + flagged elevated actions", true);
+
   // Make sure the subprocess stayed alive throughout
   const after = api.getChronosStatus();
   check("pi subprocess still alive", after?.agentStatus === "ready", after?.lastError);

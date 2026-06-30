@@ -14,8 +14,19 @@
  */
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Bbox } from "./crop-image.js";
+import type { PersistedToolResult } from "../tools/expert-tools.js";
+
+/**
+ * One agentic step within a turn: either an intermediate assistant message that
+ * requested tools, or the result of one such tool call. Tool-result images are
+ * stored as provenance refs (page/bbox/source), not base64 — they re-crop from
+ * disk on restore, like the initial page image.
+ */
+export type PersistedStep =
+  | { kind: "assistant"; message: AssistantMessage }
+  | { kind: "toolResult"; toolResult: PersistedToolResult };
 
 export interface PersistedTurn {
   prompt: string;
@@ -24,7 +35,13 @@ export interface PersistedTurn {
   bbox?: Bbox;
   /** Source dir the page came from, captured per-turn (the active source can change). */
   sourceDir?: string;
-  /** The model's reply. Text-only for experts, so it serializes small. */
+  /**
+   * Intermediate agentic steps (assistant tool calls + their results) that
+   * preceded the final response. Omitted for plain single-shot turns and for
+   * records written before experts could use tools.
+   */
+  steps?: PersistedStep[];
+  /** The model's final reply. Text-only, so it serializes small. */
   response: AssistantMessage;
 }
 

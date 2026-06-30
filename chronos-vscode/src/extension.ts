@@ -3,7 +3,7 @@ import * as path from "path";
 import { readdirSync, statSync, existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync, renameSync } from "node:fs";
 import { join, relative, extname, basename } from "node:path";
 import { Worker } from "node:worker_threads";
-import { execSync } from "node:child_process";
+import { hasPi } from "./pi-env";
 // mupdf is ESM-only — loaded via dynamic import() where needed
 import { HttpServer } from "./http-server";
 import { ChronosPanel } from "./panel/chronos-panel";
@@ -21,21 +21,15 @@ import {
   findIncompleteImports,
 } from "./import-status";
 
-const PI_NPM_PACKAGE = "@mariozechner/pi-coding-agent";
+// pi's npm package. @mariozechner/pi-coding-agent is deprecated and frozen at
+// 0.73.1 ("use @earendil-works/pi-coding-agent going forward"); the renamed
+// package is the maintained one. Override per-machine via chronos.piNpmPackage.
+const PI_NPM_PACKAGE = "@earendil-works/pi-coding-agent";
 const CHRONOS_PI_PACKAGE = "https://github.com/ai-historian/chronos";
 // The pi-package repo was renamed history-agent → chronos. GitHub redirects the
 // old URL, but pi keys a package's identity on the literal host/path, so an
 // existing history-agent entry lingers as a duplicate unless we migrate it.
 const LEGACY_PI_PACKAGE = "https://github.com/ai-historian/history-agent";
-
-function hasPi(): boolean {
-  try {
-    execSync("pi --version", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 // pi's user settings list the configured packages (each entry is either a
 // source string or a { source } object). Read them so we can detect what's
@@ -83,6 +77,62 @@ function hasLocalChronosCheckout(): boolean {
   return piPackageSources().some((s) => isChronosEntry(s) && !isGitUrlEntry(s));
 }
 
+// True when pi + the pi-package are present AND already at the ref this extension
+// wants — i.e. ensureBootstrap would early-return true without running any
+// install/reinstall task. Auto-start is gated on this (not just deps-present) so
+// an unsolicited launch never fires a (re)install terminal — e.g. after an
+// extension upgrade leaves the stored ref stale, or an install previously failed.
+// A stale / un-set-up workspace falls back to the manual command / walkthrough.
+function bootstrapReconciled(context: vscode.ExtensionContext): boolean {
+  if (!hasPi() || !hasChronosPiPackage()) return false;
+  const cfg = vscode.workspace.getConfiguration("chronos");
+  const sourceOverride = cfg.get<string>("piPackageSource")?.trim();
+  if (!sourceOverride && hasLocalChronosCheckout()) return true;
+  const wantedId = sourceOverride || `v${context.extension.packageJSON.version}`;
+  return context.globalState.get("chronos.piPackageRef") === wantedId;
+}
+
+// Serialises chronos.startSession so a concurrent invocation (auto-start racing a
+// walkthrough/manual click) joins the in-flight start instead of constructing a
+// second panel + pi subprocess before ChronosPanel.current is assigned.
+let startingSession = false;
+
+// Run a shell command as a VS Code task and resolve with its exit code. A task
+// runs in the user's shell — login-shell PATH, sudo prompts, visible output, just
+// like the integrated terminal — but unlike terminal.sendText it reports
+// completion, so the caller can await the install and continue automatically
+// instead of asking the user to re-run the command. Never rejects: a failure to
+// launch resolves to -1 so callers handle it uniformly via the exit code.
+function runSetupTask(name: string, command: string): Promise<number> {
+  const task = new vscode.Task(
+    { type: "chronos-setup" },
+    vscode.TaskScope.Workspace,
+    name,
+    "Chronos",
+    new vscode.ShellExecution(command),
+  );
+  task.presentationOptions = {
+    reveal: vscode.TaskRevealKind.Always,
+    panel: vscode.TaskPanelKind.Dedicated,
+    clear: true,
+    focus: false,
+    echo: true,
+  };
+  return new Promise<number>((resolve) => {
+    // Subscribe before executing so a fast-failing task can't end before we listen.
+    const sub = vscode.tasks.onDidEndTaskProcess((e) => {
+      if (e.execution.task === task) {
+        sub.dispose();
+        resolve(e.exitCode ?? -1);
+      }
+    });
+    vscode.tasks.executeTask(task).then(undefined, () => {
+      sub.dispose();
+      resolve(-1);
+    });
+  });
+}
+
 async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolean> {
   // Integration tests drive a mock pi binary and have no real pi/package to
   // install — skip the (modal, test-refused) bootstrap prompts.
@@ -91,47 +141,64 @@ async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolea
   // Pin the pi-package to the git tag matching this extension version, so the
   // agent tracks the extension: installing or upgrading the extension (re)installs
   // the matching pi-package. Requires a `v<version>` tag on the repo per release.
+  //
+  // Dev overrides: chronos.piPackageSource installs the pi-package from a local
+  // path or a branch (".../chronos/chronos" or "<url>@my-branch") instead of the
+  // pinned release; chronos.piNpmPackage swaps the npm package for the pi CLI
+  // itself (e.g. a fork). Both fall back to the release behaviour when unset.
+  const cfg = vscode.workspace.getConfiguration("chronos");
+  const sourceOverride = cfg.get<string>("piPackageSource")?.trim();
+  const npmPackage = cfg.get<string>("piNpmPackage")?.trim() || PI_NPM_PACKAGE;
   const wantedRef = `v${context.extension.packageJSON.version}`;
   // Pin with `@<ref>`, NOT `#<ref>`: pi's URL parser mishandles the `#` fragment
   // form and passes it straight to `git clone` (which fails). The `@` form is
   // split into a clean repo URL + a checkout ref.
-  const wantedSource = `${CHRONOS_PI_PACKAGE}@${wantedRef}`;
+  const wantedSource = sourceOverride || `${CHRONOS_PI_PACKAGE}@${wantedRef}`;
+  // Identity stored to decide "already up to date": the version ref for the release
+  // default, or the override string itself so changing the override reinstalls.
+  const wantedId = sourceOverride || wantedRef;
   const refKey = "chronos.piPackageRef";
 
   if (!hasPi()) {
     const choice = await vscode.window.showWarningMessage(
-      "Chronos requires pi (an AI agent CLI) and the Chronos pi-package. Install them now in a terminal?",
+      "Chronos requires pi (an AI agent CLI) and the Chronos pi-package. Install them now?",
       { modal: true },
       "Install",
     );
     if (choice !== "Install") return false;
-    const terminal = vscode.window.createTerminal({ name: "Chronos setup" });
-    terminal.sendText(
-      `npm install -g ${PI_NPM_PACKAGE} && pi install ${wantedSource} && echo "" && echo "Chronos setup complete. Re-run the Chronos command from the Command Palette."`,
+    const code = await runSetupTask(
+      "Install pi + Chronos agent",
+      `npm install -g ${npmPackage} && pi install ${wantedSource}`,
     );
-    terminal.show(true);
-    vscode.window.showInformationMessage(
-      "Chronos setup started in the terminal. Re-run the Chronos command once it completes.",
-    );
-    return false;
+    if (code !== 0 || !hasPi()) {
+      vscode.window.showErrorMessage(
+        `Chronos setup failed (exit code ${code}). Check the "Install pi + Chronos agent" task terminal, then run "Chronos: Install Dependencies" to retry.`,
+      );
+      return false;
+    }
+    await context.globalState.update(refKey, wantedId);
+    return true;
   }
 
   // A local dev checkout (path entry) is managed by the developer building from
-  // source — never reinstall the pinned GitHub package on top of it.
-  if (hasLocalChronosCheckout()) return true;
+  // source — never reinstall the pinned release on top of it. An explicit
+  // chronos.piPackageSource override opts back in (the dev is asking to install
+  // that source), so it skips this guard and reconciles the registration below.
+  if (!sourceOverride && hasLocalChronosCheckout()) return true;
 
   // Up to date only when the package is actually registered AND at the ref this
   // extension wants. Gating on actual presence (not just the stored ref) lets a
   // failed prior install recover on the next launch instead of being skipped.
   const installed = hasChronosPiPackage();
-  if (installed && context.globalState.get(refKey) === wantedRef) return true;
+  if (installed && context.globalState.get(refKey) === wantedId) return true;
 
   // (Re)install at the wanted ref. Covers a fresh install, an extension upgrade
   // (stored ref differs), and migrating off the legacy history-agent URL (removed
   // first, since pi keys identity on the URL and would otherwise keep both as
   // distinct packages). Prompt only when nothing is installed yet; else refresh
-  // silently. The old URL redirects to the same repo, so the remove+install is a
-  // safe no-op clone if the migration is all that changed.
+  // without prompting (the task terminal still shows progress). The old URL
+  // redirects to the same repo, so the remove+install is a safe no-op clone if the
+  // migration is all that changed.
   if (!installed) {
     const choice = await vscode.window.showInformationMessage(
       "Install the Chronos pi-package? (one-time registration with pi)",
@@ -140,22 +207,52 @@ async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolea
       "Already installed",
     );
     if (choice === "Already installed") {
-      await context.globalState.update(refKey, wantedRef);
+      await context.globalState.update(refKey, wantedId);
       return true;
     }
     if (choice !== "Install") return false;
   }
-  const migrate = hasLegacyPiPackage() ? `pi remove ${LEGACY_PI_PACKAGE} && ` : "";
-  const terminal = vscode.window.createTerminal({ name: "Chronos setup" });
-  terminal.sendText(
-    `${migrate}pi install ${wantedSource} && echo "" && echo "Chronos pi-package ${wantedRef} ready. Re-run the Chronos command."`,
+  // Remove conflicting registrations before installing, so pi never loads two
+  // chronos packages. Default: just migrate off the legacy history-agent URL. With
+  // an override: drop every other chronos entry (local path, release URL, legacy)
+  // so the registration ends up matching the override exactly.
+  const removals = sourceOverride
+    ? piPackageSources().filter((s) => isChronosEntry(s) && s !== sourceOverride)
+    : hasLegacyPiPackage()
+      ? [LEGACY_PI_PACKAGE]
+      : [];
+  const migrate = removals.map((r) => `pi remove ${r} && `).join("");
+  const code = await runSetupTask(
+    `Set up Chronos pi-package (${wantedId})`,
+    `${migrate}pi install ${wantedSource}`,
   );
-  terminal.show(true);
-  await context.globalState.update(refKey, wantedRef);
-  vscode.window.showInformationMessage(
-    `Setting up the Chronos pi-package (${wantedRef}) in the terminal. Re-run the Chronos command once it completes.`,
-  );
-  return false;
+  if (code !== 0 || !hasChronosPiPackage()) {
+    vscode.window.showErrorMessage(
+      `Chronos pi-package setup failed (exit code ${code}). Check the task terminal, then run "Chronos: Install Dependencies" to retry.`,
+    );
+    return false;
+  }
+  await context.globalState.update(refKey, wantedId);
+  return true;
+}
+
+// Walkthrough step checkmarks are driven by context keys: each `completionEvent`
+// in package.json watches one of these. Recompute them from real state (pi/pkg
+// presence, workspace scaffold, a stored provider key) so steps already satisfied
+// show as done. Cheap; called on activation and after the setup/init/login commands.
+function refreshWalkthroughContext(workspaceFolder: string | undefined): void {
+  const depsInstalled = hasPi() && hasChronosPiPackage();
+  const workspaceInitialized = !!workspaceFolder && existsSync(join(workspaceFolder, ".chronos"));
+  const providerConnected = !!workspaceFolder && hasProviderKey(join(workspaceFolder, ".chronos", ".env"));
+  void vscode.commands.executeCommand("setContext", "chronos.dependenciesInstalled", depsInstalled);
+  void vscode.commands.executeCommand("setContext", "chronos.workspaceInitialized", workspaceInitialized);
+  void vscode.commands.executeCommand("setContext", "chronos.providerConnected", providerConnected);
+}
+
+// True when .chronos/.env holds at least one non-empty *_API_KEY / *_API_TOKEN —
+// the signal that a provider has been connected (comment lines don't parse as vars).
+function hasProviderKey(envPath: string): boolean {
+  return Object.entries(readEnvFile(envPath)).some(([k, v]) => /_API_(KEY|TOKEN)$/.test(k) && v.length > 0);
 }
 
 function readEnvFile(envPath: string): Record<string, string> {
@@ -163,7 +260,9 @@ function readEnvFile(envPath: string): Record<string, string> {
   if (!existsSync(envPath)) return vars;
   const content = readFileSync(envPath, "utf-8");
   for (const line of content.split("\n")) {
-    const match = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/);
+    // Accept mixed-case names so any var the login flow can write (the "Other
+    // provider…" path allows [A-Za-z_]…) round-trips on the next session.
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
     if (match) vars[match[1]] = match[2].trim();
   }
   return vars;
@@ -205,7 +304,7 @@ data/             Per-source extraction results and outputs
 memory/           Agent memory files (MEMORY.MD, per-source notes)
 skills/           Skill definitions (markdown task instructions)
 sessions/         Agent session logs (auto-generated)
-.chronos/.env     API keys (GEMINI_API_KEY)
+.chronos/.env     Provider API keys (set via "Chronos: Connect AI Provider")
 \`\`\`
 
 ## Getting Started
@@ -234,38 +333,23 @@ sessions/         Agent session logs (auto-generated)
 5. **Browse pages**: Run **"Chronos: Show Page"** to jump the viewer to a
    specific page.
 
-## API Key
+## AI provider
 
-Your Gemini API key is stored in \`.chronos/.env\`. You can edit it there
-or re-run **"Chronos: Init Workspace"** to set a new one.
+Chronos works with any provider \`pi\` supports (Anthropic, Google, OpenAI, …).
+Click **Log in** in the Chronos panel header — or run **"Chronos: Connect AI
+Provider"** — to store an API key in \`.chronos/.env\`. You can also edit that
+file directly (e.g. \`ANTHROPIC_API_KEY=...\`).
 `
   );
 
-  // Ask for Gemini API key
-  const envPath = join(folder, ".chronos", ".env");
-  let apiKey: string | undefined;
-
-  if (existsSync(envPath)) {
-    const overwrite = await vscode.window.showQuickPick(["Keep existing key", "Enter new key"], {
-      placeHolder: "A Gemini API key already exists. What would you like to do?",
-    });
-    if (overwrite === "Enter new key") {
-      apiKey = await vscode.window.showInputBox({
-        prompt: "Enter your Gemini API key",
-        password: true,
-        placeHolder: "AIza...",
-      });
-    }
-  } else {
-    apiKey = await vscode.window.showInputBox({
-      prompt: "Enter your Gemini API key (required for agent to work)",
-      password: true,
-      placeHolder: "AIza...",
-    });
-  }
-
-  if (apiKey !== undefined) {
-    writeFileSync(envPath, `GEMINI_API_KEY=${apiKey}\n`, "utf-8");
+  // Auth is provider-agnostic and set up from the panel ("Log in" button, or the
+  // "Chronos: Connect AI Provider" command), which writes a <PROVIDER>_API_KEY
+  // into .chronos/.env. Just ensure the file exists so there's somewhere to write.
+  const chronosDir = join(folder, ".chronos");
+  const envPath = join(chronosDir, ".env");
+  if (!existsSync(envPath)) {
+    mkdirSync(chronosDir, { recursive: true });
+    writeFileSync(envPath, "# Provider API keys, e.g. ANTHROPIC_API_KEY=... or GEMINI_API_KEY=...\n", "utf-8");
   }
 
   return true;
@@ -643,23 +727,35 @@ export function activate(context: vscode.ExtensionContext): {
         return;
       }
 
-      if (!(await ensureBootstrap(context))) return;
+      // A start is already in flight (e.g. auto-start on activation); it will
+      // create or reveal the panel, so don't run a second bootstrap + createOrShow.
+      if (startingSession) return;
+      startingSession = true;
+      try {
+        // ensureBootstrap runs any install as an awaited task and returns true only
+        // once deps are present, so a false result means the user declined or the
+        // install failed (it already surfaced the error) — just stop.
+        if (!(await ensureBootstrap(context))) return;
+        refreshWalkthroughContext(workspaceFolder);
 
-      const workspaceEnv = readEnvFile(join(workspaceFolder, ".chronos", ".env"));
+        const workspaceEnv = readEnvFile(join(workspaceFolder, ".chronos", ".env"));
 
-      // Wait for the HTTP server to be ready so the port is assigned
-      await httpServer.ready;
+        // Bind the HTTP server (lazily) so the port is assigned before the agent starts.
+        await httpServer.start();
 
-      const agentEnv = {
-        CHRONOS_HTTP_PORT: String(httpServer.port),
-        // pi >= 0.7x dropped the session_directory extension hook; this env var
-        // keeps session transcripts inside the workspace in both UI modes.
-        PI_CODING_AGENT_SESSION_DIR: join(workspaceFolder, "sessions"),
-        ...workspaceEnv,
-      };
+        const agentEnv = {
+          CHRONOS_HTTP_PORT: String(httpServer.port),
+          // pi >= 0.7x dropped the session_directory extension hook; this env var
+          // keeps session transcripts inside the workspace in both UI modes.
+          PI_CODING_AGENT_SESSION_DIR: join(workspaceFolder, "sessions"),
+          ...workspaceEnv,
+        };
 
-      // pi runs as an RPC subprocess behind the combined viewer + chat panel.
-      await ChronosPanel.createOrShow(context.extensionUri, workspaceFolder, agentEnv);
+        // pi runs as an RPC subprocess behind the combined viewer + chat panel.
+        await ChronosPanel.createOrShow(context.extensionUri, workspaceFolder, agentEnv);
+      } finally {
+        startingSession = false;
+      }
     }),
 
     vscode.commands.registerCommand("chronos.showPage", async () => {
@@ -783,6 +879,20 @@ export function activate(context: vscode.ExtensionContext): {
       }
     }),
 
+    // Machine-level setup: install the pi CLI + register the Chronos pi-package.
+    // Independent of any workspace; safe to re-run to repair or upgrade. Kept
+    // separate from `chronos.init` (which only scaffolds a workspace folder) so the
+    // two scopes don't entangle. Session start still lazily ensures deps too.
+    vscode.commands.registerCommand("chronos.setup", async () => {
+      const ready = await ensureBootstrap(context);
+      refreshWalkthroughContext(workspaceFolder);
+      // On success, confirm. On failure/decline ensureBootstrap has already surfaced
+      // the error (or the user opted out) — nothing more to do.
+      if (ready) {
+        vscode.window.showInformationMessage("Chronos: dependencies are installed and ready.");
+      }
+    }),
+
     vscode.commands.registerCommand("chronos.init", async () => {
       if (!workspaceFolder) {
         vscode.window.showWarningMessage(
@@ -791,14 +901,25 @@ export function activate(context: vscode.ExtensionContext): {
         return;
       }
 
-      if (!(await ensureBootstrap(context))) return;
-
       const success = await initWorkspace(workspaceFolder);
       if (success) {
+        refreshWalkthroughContext(workspaceFolder);
         vscode.window.showInformationMessage(
           "Chronos workspace initialized. Add source directories to sources/ to get started."
         );
       }
+    }),
+
+    vscode.commands.registerCommand("chronos.login", async () => {
+      const panel = ChronosPanel.active;
+      if (!panel) {
+        vscode.window.showWarningMessage(
+          "Chronos: Start an agent session first (Chronos: Start Agent Session), then connect a provider."
+        );
+        return;
+      }
+      await panel.promptLogin();
+      refreshWalkthroughContext(workspaceFolder);
     }),
 
     vscode.commands.registerCommand("chronos.windowSetup", async () => {
@@ -818,9 +939,44 @@ export function activate(context: vscode.ExtensionContext): {
     { dispose: () => httpServer.dispose() }
   );
 
+  // Reflect current setup state in the Getting Started walkthrough checkmarks.
+  refreshWalkthroughContext(workspaceFolder);
+
+  // First run on a machine without pi: open the walkthrough once so setup is
+  // discoverable. Gated on missing pi so we never nag users who are already set up,
+  // and skipped under the integration test (mock pi, fresh profile) for determinism.
+  const WALKTHROUGH_SEEN = "chronos.walkthroughSeen";
+  if (process.env.CHRONOS_SKIP_BOOTSTRAP !== "1" && !context.globalState.get(WALKTHROUGH_SEEN) && !hasPi()) {
+    void context.globalState.update(WALKTHROUGH_SEEN, true);
+    void vscode.commands.executeCommand(
+      "workbench.action.openWalkthrough",
+      `${context.extension.id}#chronos.gettingStarted`,
+      false,
+    );
+  }
+
   // Surface any imports interrupted by a previous crash so they don't fail silently.
   if (workspaceFolder && existsSync(join(workspaceFolder, "sources"))) {
     void promptRecoverIncompleteImports(workspaceFolder);
+  }
+
+  // Auto-start the agent session when this folder is a Chronos workspace (it has
+  // a .chronos/ dir — the same signal that marks the workspace "initialized").
+  // Gated on the bootstrap already being reconciled (deps present AND at the
+  // wanted ref) so an unsolicited launch never triggers an install/reinstall
+  // task — an un-set-up or just-upgraded workspace falls back to the manual
+  // command / walkthrough. Skipped under the integration test, which starts the
+  // session itself. Opt out with chronos.autoStartSession.
+  const autoStart = vscode.workspace.getConfiguration("chronos").get<boolean>("autoStartSession", true);
+  if (
+    process.env.CHRONOS_SKIP_BOOTSTRAP !== "1" &&
+    autoStart &&
+    workspaceFolder &&
+    existsSync(join(workspaceFolder, ".chronos")) &&
+    !ChronosPanel.active &&
+    bootstrapReconciled(context)
+  ) {
+    void vscode.commands.executeCommand("chronos.startSession");
   }
 
   return {

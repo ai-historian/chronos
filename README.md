@@ -10,7 +10,7 @@ An AI agent that collaborates with historians to extract structured datasets fro
 
 - [VS Code](https://code.visualstudio.com/) (v1.110+)
 - [Node.js](https://nodejs.org/) (v18+) — required by the underlying `pi` agent the extension installs on first run
-- A [Gemini API key](https://aistudio.google.com/apikey) for the vision model
+- An API key for an AI provider with a vision-capable model (Anthropic, Google, OpenAI, …). You connect it from inside the panel — see [Start the agent](#3-start-the-agent).
 
 ## Installation
 
@@ -19,6 +19,9 @@ Install the **Chronos — The AI Historian** extension from inside VS Code:
 1. Open the Extensions view (`Ctrl+Shift+X`, or `Cmd+Shift+X` on macOS).
 2. Search for **Chronos — The AI Historian**.
 3. Click **Install**.
+
+![Find and install the Chronos extension](assets/install-03-select-extension.png)
+*Several extensions match "Chronos" — pick **Chronos — The AI Historian** (by AI-Historian), then click **Install**.*
 
 That's it. The first time you run a Chronos command, the extension checks for [`pi`](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) (the AI agent framework Chronos runs on) and the Chronos pi-package, and offers to install both in a terminal — no manual `npm install -g` or `pi install` step required.
 
@@ -29,7 +32,7 @@ If you'd rather install everything by hand:
 
 ```bash
 # 1. Install the pi agent globally
-npm install -g @mariozechner/pi-coding-agent
+npm install -g @earendil-works/pi-coding-agent
 
 # 2. Register the Chronos pi-package
 pi install https://github.com/ai-historian/chronos
@@ -44,13 +47,24 @@ The `.vsix` is published on [GitHub Releases](https://github.com/ai-historian/ch
 
 ## Getting started
 
+Every Chronos action lives in the Command Palette — press `Ctrl+Shift+P` and type *chronos*.
+
+![Chronos commands in the Command Palette](assets/guide-03-command-palette.png)
+*The three steps below all start here: **Start Agent Session**, **Connect AI Provider**, and **Import Sources**.*
+
 ### 1. Initialize a workspace
 
-Open VS Code in an empty folder. Press `Ctrl+Shift+P` and run **Chronos: Init Workspace**. This creates the workspace structure and prompts for your Gemini API key.
+Open VS Code in an empty folder. Press `Ctrl+Shift+P` and run **Chronos: Init Workspace**. This creates the workspace structure. (You connect an AI provider in step 3 — no key is needed yet.)
+
+![The workspace scaffold created by Init Workspace](assets/guide-02-workspace-ready.png)
+*Init Workspace scaffolds `sources/`, `data/`, `memory/`, `skills/`, and `sessions/` into the folder.*
 
 ### 2. Import sources
 
 Press `Ctrl+Shift+P` and run **Chronos: Import Sources**. Choose whether to select individual files or a whole folder of source material — PDFs, images (PNG, JPG, TIFF, BMP), or text files. Each file is treated as a source. PDFs are automatically converted to page images. You can import additional sources at any time by running the command again.
+
+![Import individual files or a whole folder](assets/guide-06-import-picker.png)
+*Pick individual files (PDF / image / text) or a whole folder.*
 
 Converting a large PDF can take a few minutes. Imports are crash-safe: a source only appears once it has finished converting, and if VS Code is closed or crashes mid-conversion, Chronos detects the interrupted import on the next launch (and when you next run **Import Sources**) and offers to **Resume** it (it picks up where it left off) or **Discard** the partial data.
 
@@ -60,19 +74,38 @@ Converting a large PDF can take a few minutes. Imports are crash-safe: a source 
 
 Press `Ctrl+Shift+P` and run **Chronos: Start Agent Session**. The Chronos panel opens — a page viewer on the left and a chat on the right.
 
-On first startup, type `/login` in the chat to log into your AI provider account (e.g. Anthropic, Google). Without this, no models will be available.
+![The Chronos panel header](assets/guide-04-session-panel.png)
+*From the panel header you select a **Source**, **Log in**, or start a **New** session.*
+
+On first startup no AI models are available until you connect a provider. Click **Log in** in the panel header (or run **Chronos: Connect AI Provider**) and choose how to sign in:
+
+- **Anthropic — Claude Pro/Max (subscription):** signs in with your Claude subscription via OAuth in the browser — no API key needed. The credential is stored in pi's `~/.pi/agent/auth.json`.
+- **API key (any provider):** paste a key; Chronos saves it to the workspace `.chronos/.env`.
+
+![Choosing how to sign in](assets/guide-05-choose-provider.png)
+*Sign in with a Claude subscription, or paste an API key for any supported provider.*
+
+Either way Chronos reconnects automatically. You can switch or add providers the same way at any time.
 
 Pick a source from the header dropdown (or type `/select-source`) and begin working.
 
+![A selected source with its pages in the viewer](assets/guide-07-source-loaded.png)
+*Once a source is selected, its pages render in the viewer and the agent is ready.*
+
 ## Configuration
 
-### Environment variables
+### AI provider & models
 
-Set in `.chronos/.env`:
+Connect a provider with the **Log in** button (above); it stores the key in `.chronos/.env`. You can also edit that file directly — pi reads the standard per-provider variables:
 
 ```
-GEMINI_API_KEY=your-key-here
+ANTHROPIC_API_KEY=...      # Claude
+GEMINI_API_KEY=...         # Google Gemini
+OPENAI_API_KEY=...         # OpenAI
+# OPENROUTER_API_KEY, XAI_API_KEY, MISTRAL_API_KEY, GROQ_API_KEY, DEEPSEEK_API_KEY, …
 ```
+
+The page-analysis tools (`task` / `task_batch`) default to the model selected in the header, but accept any vision-capable model pi has auth for via a `model: "provider/model-id"` argument. Chronos is provider-agnostic — choose what fits your budget and accuracy needs. As a starting point, a fast/cheap vision model (e.g. `google/gemini-3-flash-preview`) works well for routine pages, and a stronger model (e.g. `google/gemini-3.1-pro-preview` or `anthropic/claude-opus-4-8`) helps on dense or damaged pages.
 
 ### pi options
 
@@ -80,7 +113,7 @@ pi supports many options natively. Common ones:
 
 ```bash
 # Use a specific model
-pi --model gemini-2.5-pro
+pi --model anthropic/claude-opus-4-8
 
 # Continue previous session
 pi -c

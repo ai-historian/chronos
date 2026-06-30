@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { Type } from "@sinclair/typebox";
-import type { ToolDefinition, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ToolDefinition, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { listPageIds } from "../utils/page-files.js";
 import { saveSessionSource } from "../utils/session-source-store.js";
 import { sendToExtension } from "../http/http-client.js";
