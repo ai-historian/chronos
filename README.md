@@ -1,6 +1,6 @@
 # Chronos
 
-> **💬 Weekly live Q&A on Discord.** Every week at 11:00 CEST, Lorenz Hufe and Niclas Griesshaber are available for Q&A, installation help, and general discussions about AI for history. Join us: **[discord.gg/VZmfCnqkvz](https://discord.gg/VZmfCnqkvz)**
+> **💬 Weekly live Q&A on Discord.** Every week at 11:00 CEST, [Lorenz Hufe](https://hufe.info/) and [Niclas Griesshaber](https://www.niclasgriesshaber.com/) are available for Q&A, installation help, and general discussions about AI for history. Join us: **[discord.gg/VZmfCnqkvz](https://discord.gg/VZmfCnqkvz)**
 
 An AI agent that collaborates with historians to extract structured datasets from primary sources, adapt to heterogeneous documents, and accumulate domain knowledge across sessions. Chronos combines a document analysis agent with a VS Code extension to analyze scanned page images, extract structured data, and build knowledge about archival sources.
 
