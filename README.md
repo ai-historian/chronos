@@ -45,6 +45,18 @@ code --install-extension chronos-ai-historian-0.2.0.vsix
 
 The `.vsix` is published on [GitHub Releases](https://github.com/ai-historian/chronos/releases).
 
+If you want to register the Chronos pi-package only for the current workspace, so that it does not become available globally for every `pi` session in your system, run the following in the workspace folder:
+
+```bash
+# 2. Register the Chronos pi-package for the current workspace only
+pi install https://github.com/ai-historian/chronos -l
+
+# (Optional) Remove the global registration if you previously installed it globally
+pi remove https://github.com/ai-historian/chronos
+```
+
+> **Note:** The VS Code extension may still think that the Chronos pi-package is not installed if you only register it locally. It's safe to choose "Already installed" when prompted in that case, and the extension will use the local registration.
+
 </details>
 
 ## Getting started
