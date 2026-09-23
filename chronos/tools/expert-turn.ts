@@ -25,6 +25,9 @@ import {
 
 // Bound the per-turn agentic loop so a confused expert can't spin on tool calls.
 const MAX_EXPERT_TOOL_CALLS = 8;
+const MAX_EXPERT_RECOVERY_RETRIES = 2;
+const TOOL_BUDGET_EXHAUSTED =
+  "The tool budget is exhausted. Do not call any more tools; provide your final answer using the information already gathered.";
 
 const CAP_DESCRIPTION: Record<ExpertCapability, string> = {
   bash: "run shell commands",
@@ -207,7 +210,8 @@ export async function runExpertTurn(
     vision: resolved.model.input.includes("image"),
     granted: [...granted],
   });
-  let toolsEnabled = expertToolDefs.length > 0;
+  let recoveryRetries = 0;
+  let needsAnswerText = false;
   let totalCost = 0;
   let finalResponse;
 
@@ -215,12 +219,18 @@ export async function runExpertTurn(
     if (input.signal?.aborted) {
       return { ok: false, taskId, error: "Expert turn aborted." };
     }
+    const budgetExhausted = toolCallCount >= MAX_EXPERT_TOOL_CALLS;
+    let systemPrompt = pageExpertPrompt;
+    if (budgetExhausted) systemPrompt += `\n\n${TOOL_BUDGET_EXHAUSTED}`;
+    if (needsAnswerText) systemPrompt += "\n\nProvide your final answer as visible text, not just internal reasoning.";
     const response = await complete(
       resolved.model,
       {
-        systemPrompt: pageExpertPrompt,
+        systemPrompt,
         messages: [...session.messages, ...turnMessages],
-        tools: toolsEnabled ? expertToolDefs : undefined,
+        // Keep definitions with tool history: dropping them makes pi-ai send
+        // tools: [], which some OpenAI-compatible servers reject (issue #17).
+        tools: expertToolDefs,
       },
       { apiKey: resolved.apiKey, headers: resolved.headers, signal: input.signal },
     );
@@ -238,16 +248,37 @@ export async function runExpertTurn(
     if (input.signal?.aborted || response.stopReason === "aborted") {
       return { ok: false, taskId, error: "Expert turn aborted." };
     }
-    turnMessages.push(response);
-    finalResponse = response;
     totalCost += response.usage?.cost?.total ?? 0;
 
-    const toolCalls = toolsEnabled ? response.content.filter(isToolCall) : [];
-    if (response.stopReason !== "toolUse" || toolCalls.length === 0) break;
+    const toolCalls = response.content.filter(isToolCall);
+    const hasText = response.content.some((c) => c.type === "text" && c.text.trim().length > 0);
+    if (toolCalls.length === 0 && !hasText) {
+      if (recoveryRetries++ >= MAX_EXPERT_RECOVERY_RETRIES) {
+        return { ok: false, taskId, error: "Expert returned no answer text after recovery retries." };
+      }
+      // Retry from the last useful exchange. Empty/thinking-only replies need
+      // not enter either live or persisted history; their cost still counts.
+      needsAnswerText = true;
+      continue;
+    }
+    turnMessages.push(response);
+    finalResponse = response;
+    if (toolCalls.length === 0) break;
 
     // Intermediate assistant turn — record it, then run each requested tool.
     steps.push({ kind: "assistant", message: response });
     for (const call of toolCalls) {
+      if (toolCallCount >= MAX_EXPERT_TOOL_CALLS) {
+        // Even when the model ignores the instruction to stop, pair every call
+        // with a result so follow-ups and restored sessions remain valid.
+        const text = `This call was not executed. ${TOOL_BUDGET_EXHAUSTED}`;
+        const result = { toolCallId: call.id, toolName: call.name, isError: true };
+        turnMessages.push({
+          ...result, role: "toolResult", content: [{ type: "text", text }], timestamp: Date.now(),
+        });
+        steps.push({ kind: "toolResult", toolResult: { ...result, text } });
+        continue;
+      }
       toolCallCount++;
       const outcome = await executeExpertTool(call, {
         sourceDir: turnSourceDir,
@@ -259,8 +290,9 @@ export async function runExpertTurn(
       steps.push({ kind: "toolResult", toolResult: outcome.persist });
       if (outcome.viewedPageId !== undefined) currentPageId = outcome.viewedPageId;
     }
-    // Spent the budget — drop tools so the next completion must answer in text.
-    if (toolCallCount >= MAX_EXPERT_TOOL_CALLS) toolsEnabled = false;
+    if (budgetExhausted && recoveryRetries++ >= MAX_EXPERT_RECOVERY_RETRIES) {
+      return { ok: false, taskId, error: "Expert continued requesting tools after its tool budget was exhausted." };
+    }
   }
 
   session.messages.push(...turnMessages);

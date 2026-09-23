@@ -27,6 +27,9 @@ jobs:
       - name: Build chronos (tsc)
         working-directory: chronos
         run: npm run build
+      - name: Test chronos
+        working-directory: chronos
+        run: npm test
 
       # chronos-vscode — esbuild does NOT type-check, so run both tsconfigs explicitly
       - name: Install chronos-vscode

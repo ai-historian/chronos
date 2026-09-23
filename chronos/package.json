@@ -11,7 +11,8 @@
     "prompts": ["./prompts"]
   },
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
