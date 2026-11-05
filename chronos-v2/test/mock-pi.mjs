@@ -8,6 +8,9 @@
 //   "select: …"  → POST a show_page over HTTP (establishes the active source),
 //                  then reply with assistant text "source selected".
 //   "tool: …"    → emit a tool_execution_start/end (list_pages), then "done".
+//   "ask: …"     → emit a blocking extension_ui_request (select) and wait for
+//                  the extension_ui_response before replying "picked: <value>".
+//                  A cancelled response is logged to stderr ("ui-cancelled <id>").
 //   anything     → emit assistant text "echo: <message>".
 import { createInterface } from "node:readline";
 import { request } from "node:http";
@@ -108,9 +111,23 @@ function emitToolThenAssistant(toolName, text) {
   send({ type: "agent_end", messages: [msg] });
 }
 
+// Blocking ui requests awaiting an extension_ui_response, keyed by id.
+const pendingUi = new Map();
+let uiSeq = 0;
+
 function handlePrompt(message) {
   const m = (message || "").trim();
-  if (m.startsWith("select:")) {
+  if (m.startsWith("ask:")) {
+    const uiId = `ui-${++uiSeq}`;
+    pendingUi.set(uiId, (resp) => emitAssistant(resp.cancelled ? "cancelled" : `picked: ${resp.value}`));
+    send({
+      type: "extension_ui_request",
+      id: uiId,
+      method: "select",
+      title: m.slice("ask:".length).trim() || "Pick one",
+      options: ["a", "b"],
+    });
+  } else if (m.startsWith("select:")) {
     httpPost({
       type: "show_page",
       pageId: 1,
@@ -156,6 +173,13 @@ rl.on("line", (line) => {
   }
   const { id, type } = cmd;
   switch (type) {
+    case "extension_ui_response": {
+      if (cmd.cancelled) process.stderr.write(`ui-cancelled ${id}\n`);
+      const done = pendingUi.get(id);
+      pendingUi.delete(id);
+      done?.(cmd);
+      break;
+    }
     case "get_state":
       respond(type, id, state());
       break;

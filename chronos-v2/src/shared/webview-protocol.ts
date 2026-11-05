@@ -56,6 +56,8 @@ export type ExtToWebview =
   | { type: "resumeResult"; ok: boolean }
   // auth: no models are available until the user connects a provider
   | { type: "loginRequired"; required: boolean }
+  // open the in-app provider login flow (Task 8 widens this with provider data)
+  | { type: "login/open" }
   // new session: clear the viewer + source dropdown so display matches selection
   | { type: "viewer/clearSource" }
   // viewer (image URI already resolved via asWebviewUri)

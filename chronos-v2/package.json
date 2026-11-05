@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.renderer.json",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "start": "electron .",
+    "dev": "npm run build && electron . --no-sandbox",
     "dist": "npm run build && electron-builder",
     "bundle-agent": "node scripts/bundle-agent.mjs",
     "canary": "node --import tsx scripts/rpc-canary.mjs"
