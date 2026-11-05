@@ -361,6 +361,11 @@ export class ChronosChat extends LitElement {
     this.items = [...this.items, { kind: "info", text: "Agent restarted" }];
   }
 
+  /** Drop permission cards whose agent process has exited or been replaced. */
+  clearPendingRequests(): void {
+    this.permissionQueue = [];
+  }
+
   addPermissionRequest(req: { id: string; command: string; suggestedPrefix: string }): void {
     this.permissionQueue = [...this.permissionQueue, req];
   }

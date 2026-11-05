@@ -98,7 +98,12 @@ test("exit cancels pending ui requests", async () => {
     const pid = host.agentPid;
     assert.ok(pid);
     process.kill(pid, "SIGKILL");
-    await waitFor(() => posted.find((m) => m.type === "agentExited"));
+    const exited = await waitFor(() => posted.find((m) => m.type === "agentExited"));
+    // The renderer relies on uiRequest arriving before agentExited to clear it.
+    const uiIdx = posted.findIndex((m) => m.type === "uiRequest");
+    const exitIdx = posted.indexOf(exited);
+    assert.ok(uiIdx >= 0 && uiIdx < exitIdx, "uiRequest must precede agentExited");
+    assert.equal(typeof (exited.type === "agentExited" && exited.stderr), "string");
     assert.equal(host.status, "exited");
     assert.equal(host.pendingUiRequestCount, 0);
   } finally {

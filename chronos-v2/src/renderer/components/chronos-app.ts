@@ -58,6 +58,15 @@ export class ChronosApp extends LitElement {
 
   private postMessage: (msg: WebviewToExt) => void = () => {};
   private uiRequestQueue: RpcExtensionUIRequest[] = [];
+
+  // The agent that issued pending dialogs/permission cards is gone (exit or
+  // restart); answering them would send stale ids to the next pi process.
+  private clearPendingUiRequests(): void {
+    this.uiRequest = null;
+    this.uiRequestQueue = [];
+    this.chat?.clearPendingRequests();
+  }
+
   private toastSeq = 0;
 
   constructor() {
@@ -171,9 +180,11 @@ export class ChronosApp extends LitElement {
         break;
       }
       case "agentExited":
+        this.clearPendingUiRequests();
         this.chat?.handleAgentExited(msg.code, msg.stderr);
         break;
       case "agentRestarted":
+        this.clearPendingUiRequests();
         this.chat?.handleAgentRestarted();
         break;
       case "uiRequest":
