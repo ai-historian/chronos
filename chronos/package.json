@@ -1,6 +1,6 @@
 {
   "name": "chronos",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "AI economic historian agent for digitizing historical German city directories",
   "type": "module",
   "license": "LicenseRef-PolyForm-Noncommercial-1.0.0",
