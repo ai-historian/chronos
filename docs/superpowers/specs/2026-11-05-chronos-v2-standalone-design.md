@@ -151,7 +151,9 @@ Made by Claude (recorded as calls, override freely):
   Chromium parses a `standard` scheme like http and would otherwise take
   the first path segment as a lowercased host.
 - **Distribution, first release**: GitHub Releases carrying `.deb` +
-  AppImage (x64, arm64), `.dmg` (universal), NSIS `.exe` (x64). An apt
+  AppImage (x64), `.dmg` per architecture (arm64 and x64 — not universal,
+  because the vendored `sharp` prebuilds are single-arch), NSIS `.exe`
+  (x64). An apt
   repository and a Homebrew cask tap are a later layer over the same
   files.
 - **First release is unsigned.** Signing is wired in electron-builder
