@@ -85,6 +85,10 @@ export type ExtToWebview =
   | { type: "data/show"; sourceName: string; filename: string; content: string }
   // resolved page image for the data viewer's inline crop preview
   | { type: "data/sourcePreview"; imageUri: string; pageId: number; bbox: Bbox | null; sourceName: string }
+  // application-menu driven UI actions
+  | { type: "ui/openDrawer"; drawer: "history" }
+  | { type: "ui/toggle"; pane: "tree" | "chat" }
+  | { type: "ui/promptShowPage" }
   // test-only seam (integration tests): simulate a user action / request a state snapshot
   | { type: "__test/invoke"; action: string; arg?: string }
   | { type: "__test/dump" };
@@ -115,6 +119,8 @@ export type WebviewToExt =
   | { type: "editMessage"; originalText: string; occurrence: number; newText: string }
   | { type: "setYolo"; enabled: boolean }
   | { type: "viewer/navigate"; pageId: number }
+  // menu "Show page…": open a page of a source by number
+  | { type: "showPageRequest"; sourceName: string; pageId: number }
   | { type: "openViewLink"; pageId: number; bbox: Bbox | null; sourcePath?: string }
   // re-open a text file the agent showed earlier (the content isn't in the chat)
   | { type: "openTextView"; filePath: string; highlight: string | null }

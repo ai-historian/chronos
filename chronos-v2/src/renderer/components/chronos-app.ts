@@ -43,6 +43,8 @@ export class ChronosApp extends LitElement {
     loginRequired: { state: true },
     loginProviders: { state: true },
     oauthStatus: { state: true },
+    chatHidden: { state: true },
+    showPagePrompt: { state: true },
   };
 
   declare state: RpcSessionState | null;
@@ -62,6 +64,9 @@ export class ChronosApp extends LitElement {
   /** Non-null while the provider dialog is open. */
   declare loginProviders: ProviderOption[] | null;
   declare oauthStatus: OauthStatusView | null;
+  declare chatHidden: boolean;
+  /** Non-null while the menu's "Show page…" prompt is open. */
+  declare showPagePrompt: { source: string; page: string } | null;
 
   private postMessage: (msg: WebviewToExt) => void = () => {};
   private uiRequestQueue: RpcExtensionUIRequest[] = [];
@@ -94,6 +99,8 @@ export class ChronosApp extends LitElement {
     this.loginRequired = false;
     this.loginProviders = null;
     this.oauthStatus = null;
+    this.chatHidden = false;
+    this.showPagePrompt = null;
   }
 
   // Context occupancy = what the next request will carry: fresh input +
@@ -225,6 +232,16 @@ export class ChronosApp extends LitElement {
       case "yolo":
         this.yolo = msg.enabled;
         break;
+      case "ui/openDrawer":
+        this.openHistoryDrawer();
+        break;
+      case "ui/toggle":
+        // "tree": no-op until the file-tree pane lands (Task 11); message is handled so the menu item is wired.
+        if (msg.pane === "chat") this.chatHidden = !this.chatHidden;
+        break;
+      case "ui/promptShowPage":
+        this.showPagePrompt = { source: this.currentSource || this.sources[0]?.name || "", page: "1" };
+        break;
       case "sources":
         this.sources = msg.sources;
         break;
@@ -342,6 +359,39 @@ export class ChronosApp extends LitElement {
 
   // ── splitter ──────────────────────────────────────────────────────────────
 
+  private openHistoryDrawer(): void {
+    this.postMessage({ type: "refreshSessions" });
+    this.drawerOpen = true;
+  }
+
+  private submitShowPage(): void {
+    const p = this.showPagePrompt;
+    this.showPagePrompt = null;
+    const pageId = Math.floor(Number(p?.page));
+    if (!p?.source || !Number.isFinite(pageId) || pageId < 1) return;
+    this.postMessage({ type: "showPageRequest", sourceName: p.source, pageId });
+  }
+
+  private renderShowPagePrompt(): TemplateResult {
+    const p = this.showPagePrompt!;
+    return html`
+      <div class="dialog-backdrop" @click=${() => (this.showPagePrompt = null)}></div>
+      <div class="dialog" role="dialog" aria-modal="true">
+        <div class="dialog-title">Show page</div>
+        <select class="dialog-input" id="showpage-source" @change=${(e: Event) => (this.showPagePrompt = { ...p, source: (e.target as HTMLSelectElement).value })}>
+          ${this.sources.map((s) => html`<option value=${s.name} ?selected=${s.name === p.source}>${s.name} (${s.pageCount} pages)</option>`)}
+        </select>
+        <input class="dialog-input" id="showpage-page" type="number" min="1" .value=${p.page} placeholder="Page number"
+          @input=${(e: Event) => (this.showPagePrompt = { ...p, page: (e.target as HTMLInputElement).value })}
+          @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") this.submitShowPage(); if (e.key === "Escape") this.showPagePrompt = null; }} />
+        <div class="dialog-actions">
+          <button class="btn-secondary" @click=${() => (this.showPagePrompt = null)}>Cancel</button>
+          <button class="btn-send" @click=${() => this.submitShowPage()}>OK</button>
+        </div>
+      </div>
+    `;
+  }
+
   private onSplitterDown(e: PointerEvent): void {
     e.preventDefault();
     const root = this.querySelector<HTMLElement>("#app-main");
@@ -373,7 +423,7 @@ export class ChronosApp extends LitElement {
         ${this.renderHeader()}
         ${this.loginRequired ? this.renderLoginBanner() : nothing}
         <div id="app-main">
-          <div id="pane-viewer" style="flex-basis:${this.splitPct}%">
+          <div id="pane-viewer" style="flex-basis:${this.chatHidden ? 100 : this.splitPct}%">
             <div class="pv-tabs">
               <button class="pv-tab ${this.viewerTab === "page" ? "is-active" : ""}" @click=${() => (this.viewerTab = "page")}>Page</button>
               <button class="pv-tab ${this.viewerTab === "data" ? "is-active" : ""}" @click=${() => {
@@ -386,13 +436,14 @@ export class ChronosApp extends LitElement {
               <chronos-data-viewer ?hidden=${this.viewerTab !== "data"}></chronos-data-viewer>
             </div>
           </div>
-          <div id="splitter" @pointerdown=${this.onSplitterDown} title="Drag to resize"></div>
-          <div id="pane-chat" style="flex-basis:${100 - this.splitPct}%">
+          ${this.chatHidden ? nothing : html`<div id="splitter" @pointerdown=${this.onSplitterDown} title="Drag to resize"></div>`}
+          <div id="pane-chat" ?hidden=${this.chatHidden} style="flex-basis:${100 - this.splitPct}%">
             <chronos-chat></chronos-chat>
           </div>
         </div>
         ${this.drawerOpen ? this.renderDrawer() : nothing}
         ${this.uiRequest ? this.renderUiRequest() : nothing}
+        ${this.showPagePrompt ? this.renderShowPagePrompt() : nothing}
         ${this.loginProviders
           ? html`<chronos-provider-dialog
               .providers=${this.loginProviders}
@@ -476,10 +527,7 @@ export class ChronosApp extends LitElement {
           >
             <span class="yolo-dot"></span>Auto-approve
           </button>
-          <button class="header-btn" title="Past sessions" @click=${() => {
-            this.postMessage({ type: "refreshSessions" });
-            this.drawerOpen = true;
-          }}>History</button>
+          <button class="header-btn" title="Past sessions" @click=${() => this.openHistoryDrawer()}>History</button>
           <button class="header-btn" title="Start a fresh session" @click=${() => this.postMessage({ type: "newSession" })}>New</button>
         </div>
       </header>

@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, shell } from "electron";
-import { statSync } from "node:fs";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from "electron";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { resolveTheme, themeCss } from "./theme";
+import { resolveTheme, themeCss, type ThemeName } from "./theme";
 import { WindowTransport } from "./window-transport";
 import { AgentHost } from "./agent-host";
 import { buildPiLaunch } from "./pi-launcher";
@@ -9,7 +9,9 @@ import { resolveVendorPaths } from "./paths";
 import { registerChronosFileScheme, installChronosFileHandler, toChronosFileUrl } from "./protocol-handler";
 import { providerChoices, saveApiKey, startAnthropicOauth, submitAnthropicOauthCode, cancelAnthropicOauth } from "./login";
 import { RecentStore, pickFolderToCreate, pickWorkspaceToOpen } from "./workspace";
-import type { WebviewToExt, WelcomeToExt } from "../shared/webview-protocol";
+import { buildMenu, type MenuActions, type MenuState } from "./menu";
+import { readAppSettings, writeAppSettings } from "./app-settings";
+import type { ExtToWebview, WebviewToExt, WelcomeToExt } from "../shared/webview-protocol";
 
 function workspaceFromArgv(argv: string[]): string | undefined {
   const i = argv.indexOf("--workspace");
@@ -26,6 +28,10 @@ let mainWindow: BrowserWindow | undefined;
 let welcomeWindow: BrowserWindow | undefined;
 let quitting = false;
 let recent: RecentStore;
+let themePref: "system" | ThemeName = "system";
+// Live main-window host and its last reported state, for the application menu.
+let activeHost: AgentHost | undefined;
+let hostState: Pick<MenuState, "models" | "currentModel" | "thinking" | "yolo"> = { models: [], thinking: "off", yolo: false };
 
 function webPrefs(): Electron.WebPreferences {
   return { preload: join(__dirname, "preload.js"), contextIsolation: true, sandbox: false };
@@ -33,7 +39,7 @@ function webPrefs(): Electron.WebPreferences {
 
 function sendTheme(win: BrowserWindow): void {
   if (win.isDestroyed() || win.webContents.isDestroyed()) return;
-  const name = resolveTheme("system", nativeTheme.shouldUseDarkColors);
+  const name = resolveTheme(themePref, nativeTheme.shouldUseDarkColors);
   win.webContents.send("chronos:msg", { type: "theme", name, css: themeCss(name) });
 }
 
@@ -87,16 +93,19 @@ function isDirectory(p: string): boolean {
 }
 
 /** Create the main window for a workspace, replacing the welcome window. */
-function openMainWindow(workspaceDir: string): void {
+function openMainWindow(workspaceDir: string, replace = false): void {
   workspaceDir = resolve(workspaceDir);
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.focus();
+  const old = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  if (old && !replace) {
+    old.focus();
     return;
   }
   currentWorkspace = workspaceDir;
   recent.add(workspaceDir);
   const win = createMainWindow(workspaceDir);
   mainWindow = win;
+  // Swapping workspaces: the new window exists first, so the old one's close never reaches welcome/quit.
+  old?.close();
   // Close welcome only after the main window exists so window-all-closed never fires.
   if (welcomeWindow && !welcomeWindow.isDestroyed()) welcomeWindow.close();
 }
@@ -164,16 +173,28 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
     },
   });
   const h = host;
+  activeHost = h;
+  hostState = { models: [], thinking: "off", yolo: false };
+  const unsubscribe = h.onStateChange((st) => {
+    hostState = st;
+    rebuildMenu();
+  });
+  rebuildMenu();
   win.webContents.once("did-finish-load", () => void h.start());
 
   win.on("closed", () => {
     nativeTheme.off("updated", theme);
     ipcMain.off("chronos:msg", onMsg);
     cancelAnthropicOauth();
+    unsubscribe();
     void host?.stop();
-    if (mainWindow === win) mainWindow = undefined;
-    currentWorkspace = undefined;
-    if (!quitting) createWelcomeWindow();
+    if (activeHost === h) activeHost = undefined;
+    if (mainWindow === win) {
+      mainWindow = undefined;
+      currentWorkspace = undefined;
+    }
+    rebuildMenu();
+    if (!quitting && !mainWindow) createWelcomeWindow();
   });
   // Dev aid: CHRONOS_DEV_PROTOCOL_CHECK=1 loads an in-workspace PNG (expect loaded) and an outside file (expect blocked, i.e. 403) via <img>, since the renderer CSP forbids fetch().
   if (process.env.CHRONOS_DEV_PROTOCOL_CHECK === "1") {
@@ -192,8 +213,134 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
   return win;
 }
 
+// ── application menu ────────────────────────────────────────────────────────
+
+function sendToMain(msg: ExtToWebview): void {
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("chronos:msg", msg);
+}
+
+function hostMsg(msg: WebviewToExt): void {
+  void activeHost?.handleWebviewMessage(msg);
+}
+
+function setThemePref(t: "system" | ThemeName): void {
+  themePref = t;
+  try {
+    writeAppSettings(app.getPath("userData"), { theme: t });
+  } catch (e) {
+    console.error("[chronos] could not save settings:", e);
+  }
+  for (const w of BrowserWindow.getAllWindows()) sendTheme(w);
+  rebuildMenu();
+}
+
+/** Placeholder until the import flow lands (Task 10 swaps this function). */
+function importSources(): void {
+  sendToMain({ type: "notify", level: "info", message: "Import is coming in a later task" });
+}
+
+function closeWorkspace(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close(); // returns to the welcome window
+}
+
+async function newWorkspaceFromMenu(): Promise<void> {
+  const parent = BrowserWindow.getFocusedWindow();
+  const path = await pickFolderToCreate(parent);
+  if (path) openWorkspaceFromMenu(path);
+}
+
+async function openWorkspaceFromMenu(path?: string): Promise<void> {
+  const target = path ?? (await pickWorkspaceToOpen(BrowserWindow.getFocusedWindow()));
+  if (!target) return;
+  openMainWindow(target, true);
+}
+
+function agentVersion(): string {
+  try {
+    const dir = resolveVendorPaths({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appRoot: app.getAppPath() }).agentDir;
+    return JSON.parse(readFileSync(join(dir, "package.json"), "utf-8")).version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function piVersion(): string {
+  try {
+    return JSON.parse(readFileSync(join(app.getAppPath(), "package.json"), "utf-8")).piVersion ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function aboutText(): string {
+  return [
+    `Chronos ${app.getVersion()}`,
+    `Agent ${agentVersion()}`,
+    `pi ${piVersion()}`,
+    `Electron ${process.versions.electron}`,
+    `Node ${process.versions.node}`,
+  ].join("\n");
+}
+
+function showLogs(): void {
+  const dir = app.getPath("logs");
+  mkdirSync(dir, { recursive: true });
+  shell.showItemInFolder(dir);
+}
+
+function menuActions(): MenuActions {
+  const open = (url: string) => () => void shell.openExternal(url);
+  return {
+    newWorkspace: () => void newWorkspaceFromMenu(),
+    openWorkspace: () => void openWorkspaceFromMenu(),
+    openRecent: (p) => void (isDirectory(p) ? openWorkspaceFromMenu(p) : undefined),
+    importSources,
+    closeWorkspace,
+    newSession: () => hostMsg({ type: "newSession" }),
+    resumeSession: () => sendToMain({ type: "ui/openDrawer", drawer: "history" }),
+    restartAgent: () => hostMsg({ type: "restartAgent" }),
+    showPage: () => sendToMain({ type: "ui/promptShowPage" }),
+    login: () => hostMsg({ type: "login" }),
+    setModel: (provider, modelId) => hostMsg({ type: "setModel", provider, modelId }),
+    setThinking: (level) => hostMsg({ type: "setThinkingLevel", level }),
+    toggleYolo: () => hostMsg({ type: "setYolo", enabled: !hostState.yolo }),
+    toggleTree: () => sendToMain({ type: "ui/toggle", pane: "tree" }),
+    toggleChat: () => sendToMain({ type: "ui/toggle", pane: "chat" }),
+    setTheme: setThemePref,
+    // The View zoom items use Electron roles; these exist for the MenuActions contract.
+    zoomIn: () => {},
+    zoomOut: () => {},
+    zoomReset: () => {},
+    openDocs: open("https://github.com/ai-historian/chronos/blob/master/DOCS.md"),
+    openDiscord: open("https://discord.gg/VZmfCnqkvz"),
+    reportIssue: open("https://github.com/ai-historian/chronos/issues/new"),
+    showLogs,
+    about: () =>
+      void dialog.showMessageBox({ type: "info", title: "About Chronos", message: "Chronos", detail: aboutText(), buttons: ["OK"] }),
+  };
+}
+
+function rebuildMenu(): void {
+  const hasWorkspace = !!(mainWindow && !mainWindow.isDestroyed());
+  const state: MenuState = {
+    ...hostState,
+    theme: themePref,
+    hasWorkspace,
+    recent: recent ? recent.list() : [],
+  };
+  if (!hasWorkspace) Object.assign(state, { models: [], currentModel: undefined });
+  const menu = buildMenu(menuActions(), state);
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menu));
+  if (process.env.CHRONOS_DEV_MENU_DUMP === "1") {
+    const dump = Menu.getApplicationMenu()!.items.map((i) => `${i.label}(${i.submenu?.items.length ?? 0}${i.enabled ? "" : ",disabled"})`);
+    console.log(`[chronos] menu: ${dump.join(" ")}`);
+  }
+}
+
 app.whenReady().then(() => {
   recent = new RecentStore(join(app.getPath("userData"), "recent.json"));
+  themePref = readAppSettings(app.getPath("userData")).theme;
+  rebuildMenu();
   installChronosFileHandler(() => (currentWorkspace ? [currentWorkspace] : []));
   const fromArgv = workspaceFromArgv(process.argv);
   if (fromArgv) openMainWindow(fromArgv);

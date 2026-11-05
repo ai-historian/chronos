@@ -696,6 +696,9 @@ export class AgentHost {
           this.emitStateChange();
           break;
         }
+        case "showPageRequest":
+          this.showPageById(msg.sourceName, msg.pageId);
+          break;
         case "viewer/navigate": {
           if (this.currentSourceDir && this.currentSourceName) {
             this.showPage(this.currentSourceDir, this.currentSourceName, msg.pageId, null);

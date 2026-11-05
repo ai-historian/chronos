@@ -362,6 +362,10 @@ chronos-app,
   flex-direction: column;
 }
 
+#pane-chat[hidden] {
+  display: none;
+}
+
 #splitter {
   flex: 0 0 4px;
   cursor: col-resize;
