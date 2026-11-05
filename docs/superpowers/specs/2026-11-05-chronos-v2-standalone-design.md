@@ -145,8 +145,11 @@ Made by Claude (recorded as calls, override freely):
   `--vscode-*` variables `styles.css` already consumes, following the OS
   `prefers-color-scheme`. The stylesheet is not rewritten.
 - **Image delivery to the renderer**: a custom privileged protocol
-  `chronos-file://` registered in the main process, restricted to paths
-  under the open workspace (replaces `webview.asWebviewUri`).
+  `chronos-file://local/<encoded path segments>` registered in the main
+  process, restricted to paths under the open workspace (replaces
+  `webview.asWebviewUri`). The fixed `local` host is required because
+  Chromium parses a `standard` scheme like http and would otherwise take
+  the first path segment as a lowercased host.
 - **Distribution, first release**: GitHub Releases carrying `.deb` +
   AppImage (x64, arm64), `.dmg` (universal), NSIS `.exe` (x64). An apt
   repository and a Homebrew cask tap are a later layer over the same
