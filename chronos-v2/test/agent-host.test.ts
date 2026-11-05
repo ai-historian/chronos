@@ -172,3 +172,16 @@ test("login messages route to onLogin and login/open carries providers", async (
   await host.handleWebviewMessage({ type: "login/cancel" });
   assert.deepEqual(calls, ["apiKey:ANTHROPIC_API_KEY", "oauth", "code:c", "cancel"]);
 });
+
+test("workspace/import routes to onImport", async () => {
+  let imports = 0;
+  const host = new AgentHost({
+    workspaceDir: tmpdir(),
+    transport: { post: () => {} },
+    launch: () => ({ bin: process.execPath, args: [], env: {} }),
+    imageUri: (p) => p,
+    onImport: () => void imports++,
+  });
+  await host.handleWebviewMessage({ type: "workspace/import" });
+  assert.equal(imports, 1);
+});

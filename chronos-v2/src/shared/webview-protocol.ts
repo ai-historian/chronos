@@ -47,6 +47,8 @@ export type ExtToWebview =
   | { type: "agentRestarted" }
   | { type: "uiRequest"; request: RpcExtensionUIRequest }
   | { type: "notify"; level: "info" | "warning" | "error"; message: string }
+  // long-running host task (source import); one id per run, finished closes it
+  | { type: "progress"; id: string; title: string; done: number; total?: number; message?: string; finished?: boolean }
   // inline tool-call approval (bash confirms intercepted from uiRequest)
   | { type: "permissionRequest"; id: string; command: string; suggestedPrefix: string }
   | { type: "yolo"; enabled: boolean }
@@ -112,6 +114,8 @@ export type WebviewToExt =
   | { type: "selectSource"; name: string }
   | { type: "refreshSessions" }
   | { type: "refreshSources" }
+  // import sources into the workspace (file-tree context menu; same flow as File ▸ Import)
+  | { type: "workspace/import" }
   | { type: "uiResponse"; response: RpcExtensionUIResponse }
   | { type: "permissionResponse"; id: string; action: "allow" | "always" | "deny"; prefix?: string }
   // edit a past user message: fork the session to just before it, then send

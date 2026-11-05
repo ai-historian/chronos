@@ -19,6 +19,15 @@ import "./provider-dialog";
 import type { ProviderOption, OauthStatusView } from "./provider-dialog";
 import brandIcon from "../assets/chronos-icon.png";
 
+interface ProgressEntry {
+  id: string;
+  title: string;
+  done: number;
+  total?: number;
+  message?: string;
+  finished?: boolean;
+}
+
 interface Toast {
   id: number;
   level: "info" | "warning" | "error";
@@ -45,6 +54,7 @@ export class ChronosApp extends LitElement {
     oauthStatus: { state: true },
     chatHidden: { state: true },
     showPagePrompt: { state: true },
+    progress: { state: true },
   };
 
   declare state: RpcSessionState | null;
@@ -67,6 +77,8 @@ export class ChronosApp extends LitElement {
   declare chatHidden: boolean;
   /** Non-null while the menu's "Show page…" prompt is open. */
   declare showPagePrompt: { source: string; page: string } | null;
+  /** Running host tasks (source imports), keyed by progress id. */
+  declare progress: Map<string, ProgressEntry>;
 
   private postMessage: (msg: WebviewToExt) => void = () => {};
   private uiRequestQueue: RpcExtensionUIRequest[] = [];
@@ -101,6 +113,7 @@ export class ChronosApp extends LitElement {
     this.oauthStatus = null;
     this.chatHidden = false;
     this.showPagePrompt = null;
+    this.progress = new Map();
   }
 
   // Context occupancy = what the next request will carry: fresh input +
@@ -225,6 +238,9 @@ export class ChronosApp extends LitElement {
         break;
       case "notify":
         this.pushToast(msg.level, msg.message);
+        break;
+      case "progress":
+        this.updateProgress(msg);
         break;
       case "permissionRequest":
         this.chat?.addPermissionRequest({ id: msg.id, command: msg.command, suggestedPrefix: msg.suggestedPrefix });
@@ -421,6 +437,7 @@ export class ChronosApp extends LitElement {
     return html`
       <div id="app-root" @keydown=${(e: KeyboardEvent) => { if (this.viewerTab === "page") this.viewer?.handleKeydown(e); }}>
         ${this.renderHeader()}
+        ${this.progress.size ? this.renderProgress() : nothing}
         ${this.loginRequired ? this.renderLoginBanner() : nothing}
         <div id="app-main">
           <div id="pane-viewer" style="flex-basis:${this.chatHidden ? 100 : this.splitPct}%">
@@ -532,6 +549,47 @@ export class ChronosApp extends LitElement {
         </div>
       </header>
     `;
+  }
+
+  // ── progress (host tasks such as source import) ───────────────────────────
+
+  private updateProgress(p: ProgressEntry): void {
+    const { id, title, done, total, message, finished } = p;
+    const next = new Map(this.progress);
+    next.set(id, { id, title, done, total, message, finished });
+    this.progress = next;
+    if (finished) {
+      // Keep the completed bar visible briefly before dropping it.
+      setTimeout(() => {
+        if (!this.progress.get(id)?.finished) return;
+        const rest = new Map(this.progress);
+        rest.delete(id);
+        this.progress = rest;
+      }, 1500);
+    }
+  }
+
+  private renderProgress(): TemplateResult {
+    return html`${[...this.progress.values()].map((p) => {
+      const pct = p.total ? Math.max(0, Math.min(100, (p.done / p.total) * 100)) : undefined;
+      const count = p.total ? `${p.done}/${p.total}` : "";
+      return html`
+        <div class="progress-row ${p.finished ? "is-finished" : ""}" role="progressbar"
+          aria-label=${p.title}
+          aria-valuemin="0"
+          aria-valuemax=${p.total ?? nothing}
+          aria-valuenow=${p.total ? p.done : nothing}>
+          <div class="progress-text">
+            <span class="progress-title">${p.title}</span>
+            ${p.message ? html`<span class="progress-message">${p.message}</span>` : nothing}
+            ${count ? html`<span class="progress-count">${count}</span>` : nothing}
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill ${pct === undefined ? "is-indeterminate" : ""}" style="width:${pct ?? 100}%"></div>
+          </div>
+        </div>
+      `;
+    })}`;
   }
 
   private renderLoginBanner(): TemplateResult {

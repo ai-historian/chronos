@@ -45,6 +45,8 @@ export interface AgentHostOptions {
     oauthCode(code: string): void;
     cancel(): void;
   };
+  /** Import sources (renderer `workspace/import`), supplied by the Electron shell. */
+  onImport?: () => void;
 }
 
 // pi auto-registers every .md in a package's prompts/ dir as a slash command,
@@ -633,6 +635,9 @@ export class AgentHost {
           break;
         case "refreshSources":
           this.postSources();
+          break;
+        case "workspace/import":
+          this.opts.onImport?.();
           break;
         case "uiResponse":
           this.pendingUiRequestIds.delete(msg.response.id);

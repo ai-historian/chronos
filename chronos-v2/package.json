@@ -11,6 +11,7 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.renderer.json",
+    "pretest": "npm run build",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "start": "electron .",
     "dev": "npm run build && electron . --no-sandbox",

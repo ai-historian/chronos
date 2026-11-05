@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from "electron";
-import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveTheme, themeCss, type ThemeName } from "./theme";
 import { WindowTransport } from "./window-transport";
@@ -11,6 +11,14 @@ import { providerChoices, saveApiKey, startAnthropicOauth, submitAnthropicOauthC
 import { RecentStore, pickFolderToCreate, pickWorkspaceToOpen } from "./workspace";
 import { buildMenu, type MenuActions, type MenuState } from "./menu";
 import { readAppSettings, writeAppSettings } from "./app-settings";
+import {
+  findIncompleteImports,
+  importFiles,
+  importFolder,
+  resumeIncompleteImports,
+  type ImportResult,
+  type ProgressSink,
+} from "./import/import";
 import type { ExtToWebview, WebviewToExt, WelcomeToExt } from "../shared/webview-protocol";
 
 function workspaceFromArgv(argv: string[]): string | undefined {
@@ -171,6 +179,7 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
       oauthCode: submitAnthropicOauthCode,
       cancel: cancelAnthropicOauth,
     },
+    onImport: () => void importSources(),
   });
   const h = host;
   activeHost = h;
@@ -180,7 +189,10 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
     rebuildMenu();
   });
   rebuildMenu();
-  win.webContents.once("did-finish-load", () => void h.start());
+  win.webContents.once("did-finish-load", () => {
+    void h.start();
+    void promptRecoverIncompleteImports(win, h, workspaceDir);
+  });
 
   win.on("closed", () => {
     nativeTheme.off("updated", theme);
@@ -234,9 +246,136 @@ function setThemePref(t: "system" | ThemeName): void {
   rebuildMenu();
 }
 
-/** Placeholder until the import flow lands (Task 10 swaps this function). */
-function importSources(): void {
-  sendToMain({ type: "notify", level: "info", message: "Import is coming in a later task" });
+// ── source import ───────────────────────────────────────────────────────────
+
+let importRunning = false;
+
+function importWorkers(): { pdf: string; split: string } {
+  return { pdf: join(__dirname, "pdf-worker.js"), split: join(__dirname, "pdf-split-worker.js") };
+}
+
+/** Progress events go to the window the import started in (not whichever is main later). */
+function progressTo(transport: WindowTransport): ProgressSink {
+  return (p) => transport.post({ type: "progress", ...p });
+}
+
+/** Run one import job with the single-import guard; returns undefined if another is running. */
+async function runImportJob(transport: WindowTransport, job: () => Promise<ImportResult>): Promise<ImportResult | undefined> {
+  if (importRunning) {
+    transport.post({ type: "notify", level: "warning", message: "An import is already running" });
+    return undefined;
+  }
+  importRunning = true;
+  try {
+    return await job();
+  } catch (e) {
+    transport.post({ type: "notify", level: "error", message: `Chronos Import failed: ${(e as Error).message}` });
+    return undefined;
+  } finally {
+    importRunning = false;
+  }
+}
+
+async function importSources(): Promise<void> {
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  const host = activeHost;
+  const workspace = currentWorkspace;
+  if (!win || !host || !workspace) return;
+  const transport = new WindowTransport(win);
+  if (importRunning) {
+    transport.post({ type: "notify", level: "warning", message: "An import is already running" });
+    return;
+  }
+
+  const { response } = await dialog.showMessageBox(win, {
+    message: "Import sources",
+    detail: "Import individual files, or every supported file in a folder?",
+    buttons: ["Files…", "Folder…", "Cancel"],
+    cancelId: 2,
+  });
+  if (response === 2) return;
+  const folderMode = response === 1;
+  const picked = await dialog.showOpenDialog(
+    win,
+    folderMode
+      ? { properties: ["openDirectory"] }
+      : {
+          properties: ["openFile", "multiSelections"],
+          filters: [{ name: "Documents", extensions: ["pdf", "png", "jpg", "jpeg", "tif", "tiff", "txt"] }],
+        },
+  );
+  if (picked.canceled || picked.filePaths.length === 0) return;
+
+  const sourcesDir = join(workspace, "sources");
+  const progress = progressTo(transport);
+  const result = await runImportJob(transport, () =>
+    folderMode
+      ? importFolder(picked.filePaths[0], sourcesDir, importWorkers(), progress)
+      : importFiles(picked.filePaths, sourcesDir, importWorkers(), progress),
+  );
+  if (!result) return;
+  host.refreshSources();
+
+  const total = result.imported + result.skipped.length + result.errors.length;
+  if (folderMode && total === 0) {
+    transport.post({
+      type: "notify",
+      level: "warning",
+      message: "Chronos: No supported files found in that folder (pdf, txt, png, jpg, jpeg, tif, tiff, bmp).",
+    });
+    return;
+  }
+  const parts: string[] = [];
+  if (result.imported > 0) parts.push(`${result.imported} imported`);
+  if (result.skipped.length > 0) parts.push(`${result.skipped.length} skipped (already exist or unsupported)`);
+  if (result.errors.length > 0) parts.push(`${result.errors.length} errors`);
+  const summary = parts.join(", ");
+  if (result.errors.length > 0) {
+    transport.post({ type: "notify", level: "warning", message: `Chronos Import: ${summary}. Errors: ${result.errors.join("; ")}` });
+  } else {
+    transport.post({ type: "notify", level: "info", message: `Chronos Import: ${summary}.` });
+  }
+}
+
+// If any imports were interrupted (markers left behind), tell the user and offer to resume or
+// discard. Called when a workspace window opens so failures are never silent.
+async function promptRecoverIncompleteImports(win: BrowserWindow, host: AgentHost, workspace: string): Promise<void> {
+  const sourcesDir = join(workspace, "sources");
+  const incompletes = findIncompleteImports(sourcesDir);
+  if (incompletes.length === 0 || win.isDestroyed()) return;
+  const transport = new WindowTransport(win);
+
+  const detail = incompletes
+    .map((i) => {
+      const pages = i.marker.expectedPages ? `${i.renderedPages}/${i.marker.expectedPages}` : `${i.renderedPages}`;
+      return `${i.name} (${pages} pages${i.marker.lastError ? `; ${i.marker.lastError}` : ""})`;
+    })
+    .join(", ");
+  const { response } = await dialog.showMessageBox(win, {
+    type: "warning",
+    message: `Chronos: ${incompletes.length} source import(s) were interrupted and are incomplete: ${detail}. Resume now, or discard the partial data?`,
+    buttons: ["Resume", "Discard", "Later"],
+    defaultId: 0,
+    cancelId: 2,
+  });
+  if (response === 0) {
+    const result = await runImportJob(transport, () =>
+      resumeIncompleteImports(incompletes, sourcesDir, importWorkers(), progressTo(transport)),
+    );
+    if (!result) return;
+    host.refreshSources();
+    const summary = [result.imported ? `${result.imported} completed` : "", result.errors.length ? `${result.errors.length} failed` : ""]
+      .filter(Boolean)
+      .join(", ");
+    if (result.errors.length) {
+      transport.post({ type: "notify", level: "warning", message: `Chronos: Resume — ${summary || "nothing to do"}. ${result.errors.join("; ")}` });
+    } else {
+      transport.post({ type: "notify", level: "info", message: `Chronos: Resume — ${summary || "nothing to do"}.` });
+    }
+  } else if (response === 1) {
+    for (const i of incompletes) rmSync(i.sourceDir, { recursive: true, force: true });
+    transport.post({ type: "notify", level: "info", message: `Chronos: discarded ${incompletes.length} incomplete import(s).` });
+  }
 }
 
 function closeWorkspace(): void {
@@ -294,7 +433,7 @@ function menuActions(): MenuActions {
     newWorkspace: () => void newWorkspaceFromMenu(),
     openWorkspace: () => void openWorkspaceFromMenu(),
     openRecent: (p) => void (isDirectory(p) ? openWorkspaceFromMenu(p) : undefined),
-    importSources,
+    importSources: () => void importSources(),
     closeWorkspace,
     newSession: () => hostMsg({ type: "newSession" }),
     resumeSession: () => sendToMain({ type: "ui/openDrawer", drawer: "history" }),

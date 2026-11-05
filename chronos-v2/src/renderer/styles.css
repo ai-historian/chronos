@@ -2789,3 +2789,84 @@ chronos-data-viewer,
   width: 100%;
   margin-bottom: 12px;
 }
+
+/* ── host task progress (source import) ─────────────────────────────────── */
+
+.progress-row {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 14px 7px 12px;
+  border-bottom: 1px solid var(--ch-border);
+  background: var(--ch-surface-1);
+  font-size: 12px;
+}
+
+.progress-text {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.progress-title {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--ch-fg);
+}
+
+.progress-message {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ch-muted);
+}
+
+.progress-count {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--ch-muted);
+}
+
+.progress-track {
+  height: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--vscode-editorWidget-border);
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--vscode-button-background);
+  transition: width 200ms ease;
+}
+
+.progress-fill.is-indeterminate {
+  opacity: 0.45;
+  animation: progress-pulse 1.2s ease-in-out infinite;
+}
+
+.progress-row.is-finished .progress-fill {
+  opacity: 1;
+  animation: none;
+}
+
+@keyframes progress-pulse {
+  50% {
+    opacity: 0.15;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
+  .progress-fill.is-indeterminate {
+    animation: none;
+  }
+}
