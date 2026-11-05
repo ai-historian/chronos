@@ -7,8 +7,8 @@ const nodeCtx = await esbuild.context({
   entryPoints: {
     main: "src/main/main.ts",
     preload: "src/preload/preload.ts",
-    "pdf-worker": "src/main/pdf-worker.ts",
-    "pdf-split-worker": "src/main/pdf-split-worker.ts",
+    "pdf-worker": "src/main/import/pdf-worker.ts",
+    "pdf-split-worker": "src/main/import/pdf-split-worker.ts",
   },
   bundle: true,
   outdir: "out",
