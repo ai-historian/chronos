@@ -2,13 +2,13 @@
 // Populates chronos-v2/vendor/{pi,chronos} (gitignored) for packaging, and
 // copies third-party licence texts into resources/licenses/.
 //
-// Sequence in ../chronos (the agent pi-package):
-//   1. npm ci                              full install (typescript is a devDependency)
-//   2. npm run build                       tsc -> dist/
-//   3. copy dist, prompts, skills (if any), package.json -> vendor/chronos/
-//   4. npm ci --omit=dev --omit=peer       prod-only tree: dotenv, sharp(+@img/*), @sinclair/typebox
-//   5. copy node_modules -> vendor/chronos/node_modules
-//   6. npm ci                              (always, even on failure) restore the full dev tree
+// Chronos agent (the ../chronos pi-package):
+//   1. (../chronos)      npm ci                         full install (typescript is a devDependency)
+//   2. (../chronos)      npm run build                  tsc -> dist/
+//   3. copy dist, prompts, skills (if any), package.json, package-lock.json -> vendor/chronos/
+//   4. (vendor/chronos)  npm ci --omit=dev --omit=peer  prod-only tree: dotenv, sharp(+@img/*), @sinclair/typebox
+// The prod install runs in the vendor copy, so ../chronos/node_modules is only
+// ever a full dev tree and ../chronos always stays buildable.
 // The pi peers are not vendored with the agent: pi's extension loader aliases
 // @earendil-works/pi-{ai,coding-agent} to its own bundled copies.
 //
@@ -53,18 +53,12 @@ console.log(`vendored pi ${piPkg.version} -> ${piDest}`);
 const agentDest = join(vendor, "chronos");
 rmSync(agentDest, { recursive: true, force: true });
 mkdirSync(agentDest, { recursive: true });
-try {
-  run("npm ci", agentSrc);
-  run("npm run build", agentSrc);
-  for (const entry of ["dist", "prompts", "skills", "package.json"]) {
-    if (existsSync(join(agentSrc, entry))) cpSync(join(agentSrc, entry), join(agentDest, entry), { recursive: true });
-  }
-  run("npm ci --omit=dev --omit=peer", agentSrc);
-  cpSync(join(agentSrc, "node_modules"), join(agentDest, "node_modules"), { recursive: true });
-} finally {
-  // Never leave ../chronos without its dev tree (npm run build needs typescript).
-  run("npm ci", agentSrc);
+run("npm ci", agentSrc);
+run("npm run build", agentSrc);
+for (const entry of ["dist", "prompts", "skills", "package.json", "package-lock.json"]) {
+  if (existsSync(join(agentSrc, entry))) cpSync(join(agentSrc, entry), join(agentDest, entry), { recursive: true });
 }
+run("npm ci --omit=dev --omit=peer", agentDest);
 console.log(`vendored chronos agent -> ${agentDest}`);
 
 // --- licences -----------------------------------------------------------
@@ -89,10 +83,13 @@ const agentModules = join(agentDest, "node_modules");
 copyLicense(join(agentModules, "sharp", "LICENSE"), "sharp");
 const libvips = readdirSync(join(agentModules, "@img")).find((d) => d.startsWith("sharp-libvips-"));
 if (!libvips) throw new Error("no @img/sharp-libvips-* prebuild in vendored agent");
-// The libvips prebuilds ship no LICENSE file; their README.md carries the
-// per-library licence table (libvips itself is LGPL-3.0-or-later).
-const libvipsDir = join(agentModules, "@img", libvips);
-copyLicense(join(libvipsDir, existsSync(join(libvipsDir, "LICENSE")) ? "LICENSE" : "README.md"), "sharp-libvips");
+// The libvips prebuilds (LGPL-3.0-or-later) ship no LICENSE file. The full
+// LGPL-3.0 and GPL-3.0 texts are committed statically in resources/licenses/;
+// the prebuild's README licence table is kept as a supplementary notice.
+for (const name of ["LGPL-3.0.txt", "GPL-3.0.txt"]) {
+  if (!existsSync(join(licensesDir, name))) throw new Error(`missing static licence text: resources/licenses/${name}`);
+}
+copyLicense(join(agentModules, "@img", libvips, "README.md"), "sharp-libvips-NOTICE");
 copyLicense(join(appRoot, "node_modules", "mupdf", "LICENSE"), "mupdf");
 console.log(`licences -> ${licensesDir}`);
 
