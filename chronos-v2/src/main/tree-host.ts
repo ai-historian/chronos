@@ -1,6 +1,6 @@
 // Main-side handling of the workspace file tree: listings, watching expanded dirs, and file actions.
-import { statSync } from "node:fs";
-import { relative, resolve, sep } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isAllowedPath } from "./protocol-handler";
 import { DirWatcher, listDir, type DirChange, type TreeEntry } from "./files";
 import type { Transport } from "./transport";
@@ -23,6 +23,30 @@ export interface TreeHostOptions {
 
 const PAGE_FILE = /^page_(\d+)\.(png|jpe?g)$/i;
 
+/** Extensions shell.openPath would execute rather than open in a viewer app (any platform). */
+export const LAUNCHABLE_EXTENSIONS: readonly string[] = [
+  "exe", "bat", "cmd", "com", "ps1", "vbs", "js", "jse", "wsf", "wsh", "msi", "lnk", "scr", "pif",
+  "app", "command", "sh", "bash", "zsh", "desktop", "appimage", "jar", "run",
+];
+
+/** True for files that opening would run: a launchable extension, or (POSIX) any exec bit. */
+export function isLaunchable(path: string): boolean {
+  const ext = extname(path).slice(1).toLowerCase();
+  if (LAUNCHABLE_EXTENSIONS.includes(ext)) return true;
+  if (process.platform === "win32") return false;
+  try {
+    return (statSync(path).mode & 0o111) !== 0;
+  } catch {
+    return true; // can't tell: err on the side of not launching
+  }
+}
+
+/** A renderer path after validation: `real` is used for all fs/OS access, `logical` keys the renderer's model. */
+interface Checked {
+  real: string;
+  logical: string;
+}
+
 function electronOs(): TreeHostOs {
   const { shell, clipboard } = require("electron") as typeof import("electron");
   return {
@@ -34,6 +58,8 @@ function electronOs(): TreeHostOs {
 
 export class TreeHost {
   private readonly root: string;
+  /** realpath of root (root itself may sit behind a symlink, e.g. /tmp on macOS). */
+  private readonly realRoot: string;
   private readonly watcher: DirWatcher;
   /** Dirs the renderer has expanded (and we watch), root included. */
   private readonly open = new Set<string>();
@@ -41,6 +67,13 @@ export class TreeHost {
 
   constructor(private readonly opts: TreeHostOptions) {
     this.root = resolve(opts.root);
+    let realRoot = this.root;
+    try {
+      realRoot = realpathSync(this.root);
+    } catch {
+      // root missing: every validate() fails anyway
+    }
+    this.realRoot = realRoot;
     this.os = opts.os;
     this.watcher = new DirWatcher(this.root, (e) => this.onFsChange(e));
   }
@@ -61,18 +94,19 @@ export class TreeHost {
     switch (msg.type) {
       case "tree/expand": {
         const p = this.validate(msg.path);
-        if (p && this.isDir(p)) {
-          this.postChildren(p);
-          this.open.add(p);
-          this.watcher.watch(p);
+        if (p && this.isDir(p.real)) {
+          this.postChildren(p.logical, p.real);
+          // Watch the logical path so change events carry the paths the renderer knows.
+          this.open.add(p.logical);
+          this.watcher.watch(p.logical);
         }
         return true;
       }
       case "tree/collapse": {
         const p = this.validate(msg.path);
-        if (p && p !== this.root) {
-          this.open.delete(p);
-          this.watcher.unwatch(p);
+        if (p && p.logical !== this.root) {
+          this.open.delete(p.logical);
+          this.watcher.unwatch(p.logical);
         }
         return true;
       }
@@ -86,17 +120,17 @@ export class TreeHost {
         return true;
       case "file/open": {
         const p = this.validate(msg.path);
-        if (p) this.openFile(p);
+        if (p) this.openFile(p.real);
         return true;
       }
       case "file/revealInOs": {
         const p = this.validate(msg.path);
-        if (p) this.osApi().showItemInFolder(p);
+        if (p) this.osApi().showItemInFolder(p.real);
         return true;
       }
       case "file/copyPath": {
         const p = this.validate(msg.path);
-        if (p) this.osApi().copyText(p);
+        if (p) this.osApi().copyText(p.real);
         return true;
       }
       default:
@@ -106,14 +140,28 @@ export class TreeHost {
 
   // ── internals ─────────────────────────────────────────────────────────────
 
-  /** Absolute path inside the workspace and not under a hidden (dot) segment, else null. */
-  private validate(path: unknown): string | null {
+  /**
+   * Resolve a renderer path to its realpath and accept it only if that realpath lies inside the
+   * workspace and has no hidden (dot) segment relative to it. Checking the realpath (not the
+   * requested string) stops a symlink like `envlink -> .chronos/.env`, and callers use `real` so
+   * the checked path and the used path cannot diverge. Non-existent paths are rejected.
+   */
+  private validate(path: unknown): Checked | null {
     if (typeof path !== "string" || path.length === 0) return null;
-    const abs = resolve(path);
-    if (!isAllowedPath(this.root, abs)) return null;
-    const rel = relative(this.root, abs);
+    const logical = resolve(path);
+    let real: string;
+    try {
+      real = realpathSync(logical);
+    } catch {
+      return null;
+    }
+    if (!isAllowedPath(this.realRoot, real)) return null;
+    const rel = relative(this.realRoot, real);
     if (rel && rel.split(sep).some((seg) => seg.startsWith("."))) return null;
-    return abs;
+    // The logical path must also stay inside the root with no dot segment (it keys the model).
+    const relLogical = relative(this.root, logical);
+    if (isAbsolute(relLogical) || relLogical.startsWith("..") || relLogical.split(sep).some((seg) => seg.startsWith("."))) return null;
+    return { real, logical };
   }
 
   private osApi(): TreeHostOs {
@@ -129,11 +177,17 @@ export class TreeHost {
   }
 
   private openFile(p: string): void {
-    const segs = relative(this.root, p).split(sep);
+    const segs = relative(this.realRoot, p).split(sep);
     const m = PAGE_FILE.exec(segs[segs.length - 1] ?? "");
     // <root>/sources/<source...>/png/page_NNNN.png → viewer
     if (m && segs.length >= 4 && segs[0] === "sources" && segs[segs.length - 2] === "png" && this.opts.showPage) {
       this.opts.showPage(segs.slice(1, -2).join("/"), parseInt(m[1], 10));
+      return;
+    }
+    if (isLaunchable(p)) {
+      // openPath would execute it; reveal it instead.
+      this.osApi().showItemInFolder(p);
+      this.opts.transport.post({ type: "notify", level: "info", message: "Executable files are revealed, not launched" });
       return;
     }
     this.osApi().openPath(p);
@@ -149,9 +203,11 @@ export class TreeHost {
     this.opts.transport.post({ type: "tree", root: this.root, entries });
   }
 
-  private postChildren(dir: string): void {
+  /** List `real` (defaults to `dir`) and post it under the renderer-facing `dir`. */
+  private postChildren(dir: string, real = dir): void {
     try {
-      this.opts.transport.post({ type: "tree/children", path: dir, entries: listDir(dir, this.root) });
+      const entries = listDir(real, this.root).map((e) => (real === dir ? e : { ...e, path: join(dir, e.name) }));
+      this.opts.transport.post({ type: "tree/children", path: dir, entries });
     } catch {
       // vanished between check and list; the parent's watcher reports the unlink
     }
