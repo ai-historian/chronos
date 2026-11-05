@@ -53,7 +53,7 @@ const MAX_WASM_PDF_BYTES = 2 ** 31;
 
 // Render every page of a (<2 GiB) PDF to PNGs via a pool of worker threads. pageOffset is
 // added to each page index for naming, so split parts produce globally-numbered pages.
-async function renderPdfFile(
+export async function renderPdfFile(
   workerScript: string,
   filePath: string,
   pngDir: string,
@@ -71,16 +71,23 @@ async function renderPdfFile(
   }
 
   let batchIdx = 0;
+  // On the first failure the remaining workers are terminated (below); `failed` stops any
+  // late messages from reporting progress and keeps new batches from being started.
+  let failed = false;
+  const live = new Set<Worker>();
   const runNext = (): Promise<void> => {
     const idx = batchIdx++;
-    if (idx >= batches.length) return Promise.resolve();
+    if (failed || idx >= batches.length) return Promise.resolve();
     const { start, end } = batches[idx];
     return new Promise<void>((resolve, reject) => {
       const w = new Worker(workerScript, {
         workerData: { filePath, pngDir, startPage: start, endPage: end, pageOffset, dpi: 200 },
       });
+      live.add(w);
+      w.once("exit", () => live.delete(w));
       let workerError = "";
       w.on("message", (msg: { type: string; page?: number; message?: string }) => {
+        if (failed) return;
         if (msg.type === "progress") {
           completed++;
           onProgress(completed);
@@ -99,7 +106,15 @@ async function renderPdfFile(
     }).then(() => runNext());
   };
 
-  await Promise.all(Array.from({ length: Math.min(POOL_SIZE, batches.length) }, () => runNext()));
+  try {
+    await Promise.all(Array.from({ length: Math.min(POOL_SIZE, batches.length) }, () => runNext()));
+  } catch (err) {
+    // Promise.all rejects on the first failure while siblings keep running; stop them so they
+    // neither report progress after the import has ended nor keep writing into png.partial.
+    failed = true;
+    await Promise.allSettled([...live].map((w) => w.terminate()));
+    throw err;
+  }
 }
 
 // Split a >= 2 GiB PDF into <2 GiB part files (in outDir) using a pdf-lib worker thread, so
@@ -320,7 +335,11 @@ async function runImports(
   const n = items.length;
   const single = n === 1;
   let last = { done: 0, total: n as number | undefined };
+  // Once `finished` is sent the run is closed: nothing may reopen the renderer's entry.
+  let closed = false;
   const emit = (p: { done: number; total?: number; message?: string; finished?: boolean }) => {
+    if (closed) return;
+    if (p.finished) closed = true;
     last = { done: p.done, total: p.total };
     try {
       progress({ id, title, ...p });

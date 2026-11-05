@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { PDFDocument, rgb } from "pdf-lib";
-import { importFiles, findIncompleteImports, resumeIncompleteImports, type ProgressSink } from "../src/main/import/import";
+import { importFiles, findIncompleteImports, resumeIncompleteImports, renderPdfFile, type ProgressSink } from "../src/main/import/import";
 import { writeImportMarker } from "../src/main/import/import-status";
 
 const OUT = join(__dirname, "..", "out");
@@ -118,4 +118,57 @@ test("resumeIncompleteImports finishes a partial import and renames .png.partial
   assert.ok(!existsSync(join(src, ".png.partial")));
   assert.ok(!existsSync(join(src, ".importing.json")));
   assert.deepEqual(findIncompleteImports(sourcesDir), []);
+}));
+
+// Fake pdf worker: the batch starting at page 0 fails fast; every other batch keeps
+// posting progress for ~1 s. Exercises the pool's failure path without a real render.
+const FAKE_WORKER = `
+const { workerData, parentPort } = require("node:worker_threads");
+const { startPage, endPage } = workerData;
+if (startPage === 0) {
+  setTimeout(() => { parentPort.postMessage({ type: "error", message: "injected failure" }); process.exit(1); }, 50);
+} else {
+  let i = startPage;
+  const t = setInterval(() => {
+    parentPort.postMessage({ type: "progress", page: i + 1 });
+    if (++i >= endPage) { clearInterval(t); parentPort.postMessage({ type: "done" }); }
+  }, 20);
+}
+`;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+test("renderPdfFile terminates sibling workers on first failure", TIMEOUT, withTmp(async (dir) => {
+  const fake = join(dir, "fake-worker.js");
+  writeFileSync(fake, FAKE_WORKER);
+  let calls = 0;
+  await assert.rejects(renderPdfFile(fake, join(dir, "x.pdf"), dir, 200, 0, () => void calls++), /injected failure/);
+  const atReject = calls;
+  await sleep(500);
+  assert.equal(calls, atReject, "no progress from orphaned workers after rejection");
+}));
+
+test("no progress event arrives after finished (failing multi-batch import)", TIMEOUT, withTmp(async (dir) => {
+  const fake = join(dir, "fake-worker.js");
+  writeFileSync(fake, FAKE_WORKER);
+  const pdf = join(dir, "Big.pdf");
+  await makePdf(pdf, 200); // 4 batches -> 4 concurrent workers
+  const sourcesDir = join(dir, "sources");
+  const events: Parameters<ProgressSink>[0][] = [];
+  const res = await importFiles([pdf], sourcesDir, { pdf: fake, split: workers.split }, (p) => events.push(p));
+  assert.equal(res.errors.length, 1);
+  await sleep(500);
+  assert.equal(events.filter((e) => e.finished).length, 1);
+  assert.equal(events[events.length - 1].finished, true, "finished is the last event");
+}));
+
+test("corrupt pdf: finished is the last progress event", TIMEOUT, withTmp(async (dir) => {
+  const bad = join(dir, "Broken.pdf");
+  writeFileSync(bad, randomBytes(4096));
+  const events: Parameters<ProgressSink>[0][] = [];
+  const res = await importFiles([bad], join(dir, "sources"), workers, (p) => events.push(p));
+  assert.equal(res.errors.length, 1);
+  await sleep(500);
+  assert.equal(events[events.length - 1].finished, true);
+  assert.equal(events.filter((e) => e.finished).length, 1);
 }));

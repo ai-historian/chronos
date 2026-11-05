@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from "electron";
-import { mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveTheme, themeCss, type ThemeName } from "./theme";
 import { WindowTransport } from "./window-transport";
@@ -19,6 +19,7 @@ import {
   type ImportResult,
   type ProgressSink,
 } from "./import/import";
+import { readImportMarker } from "./import/import-status";
 import type { ExtToWebview, WebviewToExt, WelcomeToExt } from "../shared/webview-protocol";
 
 function workspaceFromArgv(argv: string[]): string | undefined {
@@ -344,6 +345,12 @@ async function promptRecoverIncompleteImports(win: BrowserWindow, host: AgentHos
   const incompletes = findIncompleteImports(sourcesDir);
   if (incompletes.length === 0 || win.isDestroyed()) return;
   const transport = new WindowTransport(win);
+  // An import keeps running in the main process when its window closes, so a reopened
+  // workspace can see that import's live marker. Never offer to resume/discard it.
+  if (importRunning) {
+    transport.post({ type: "notify", level: "info", message: "An import is still running; recovery will be offered next time" });
+    return;
+  }
 
   const detail = incompletes
     .map((i) => {
@@ -373,8 +380,19 @@ async function promptRecoverIncompleteImports(win: BrowserWindow, host: AgentHos
       transport.post({ type: "notify", level: "info", message: `Chronos: Resume — ${summary || "nothing to do"}.` });
     }
   } else if (response === 1) {
-    for (const i of incompletes) rmSync(i.sourceDir, { recursive: true, force: true });
-    transport.post({ type: "notify", level: "info", message: `Chronos: discarded ${incompletes.length} incomplete import(s).` });
+    if (importRunning) {
+      transport.post({ type: "notify", level: "warning", message: "An import is already running; nothing was discarded" });
+      return;
+    }
+    let discarded = 0;
+    for (const i of incompletes) {
+      // Re-check right before deleting: a source that completed meanwhile (has png/) or whose
+      // marker is gone is no longer an incomplete import and must never be discarded.
+      if (existsSync(join(i.sourceDir, "png")) || !readImportMarker(i.sourceDir)) continue;
+      rmSync(i.sourceDir, { recursive: true, force: true });
+      discarded++;
+    }
+    transport.post({ type: "notify", level: "info", message: `Chronos: discarded ${discarded} incomplete import(s).` });
   }
 }
 
