@@ -1,6 +1,7 @@
 // Typed message protocol between the extension host and the Chronos webview.
 // Imported by both bundles (src/ and webview/) — single source of truth.
 
+import type { ThemeName } from "../main/theme";
 import type {
   AgentEvent,
   AgentMessage,
@@ -34,6 +35,8 @@ export interface ChronosSessionInfo {
 }
 
 export type ExtToWebview =
+  // app theme (CSS variables text applied by the renderer)
+  | { type: "theme"; name: ThemeName; css: string }
   // chat / agent
   | { type: "agentEvent"; event: AgentEvent }
   | { type: "state"; state: RpcSessionState }

@@ -1,3 +1,28 @@
-import { contextBridge } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
+import type { ExtToWebview, WebviewToExt } from "../shared/webview-protocol";
 
-contextBridge.exposeInMainWorld("chronos", { version: process.versions.electron });
+const STATE_KEY = "chronos.uiState";
+
+contextBridge.exposeInMainWorld("chronos", {
+  postMessage(msg: WebviewToExt): void {
+    ipcRenderer.send("chronos:msg", msg);
+  },
+  onMessage(cb: (msg: ExtToWebview) => void): void {
+    ipcRenderer.on("chronos:msg", (_e, msg: ExtToWebview) => cb(msg));
+  },
+  getState(): unknown {
+    try {
+      const raw = localStorage.getItem(STATE_KEY);
+      return raw === null ? undefined : JSON.parse(raw);
+    } catch {
+      return undefined;
+    }
+  },
+  setState(s: unknown): void {
+    try {
+      localStorage.setItem(STATE_KEY, JSON.stringify(s));
+    } catch {
+      /* storage unavailable */
+    }
+  },
+});
