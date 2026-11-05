@@ -7,7 +7,8 @@
  * Only USER prompts are sent — never assistant replies, tool results, or page
  * images — so the input stays tiny, cheap, and free of extracted content.
  */
-import { complete, type UserMessage } from "@earendil-works/pi-ai";
+import type { UserMessage } from "@earendil-works/pi-ai";
+import { complete } from "./pi-ai-compat.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { helperModelCandidates, resolveExpertModel } from "./resolve-model.js";
 

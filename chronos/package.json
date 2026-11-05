@@ -15,10 +15,10 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@sinclair/typebox": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "dependencies": {
+    "@sinclair/typebox": "^0.34",
     "dotenv": "^16.4.0",
     "sharp": "^0.34.5"
   },
