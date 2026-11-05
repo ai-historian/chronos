@@ -36,6 +36,15 @@ export interface AgentHostOptions {
   onTitle?: (t: string) => void;
   /** The agent is blocked on the user (dialog/approval) — bring the window forward. */
   onAttention?: () => void;
+  /** Provider choices for the login dialog. */
+  loginProviders?: () => { id: string; label: string; envVar: string }[];
+  /** Provider-login handlers (API key / Claude OAuth), supplied by the Electron shell. */
+  onLogin?: {
+    apiKey(envVar: string, key: string): Promise<void>;
+    oauthStart(): Promise<void>;
+    oauthCode(code: string): void;
+    cancel(): void;
+  };
 }
 
 // pi auto-registers every .md in a package's prompts/ dir as a slash command,
@@ -567,8 +576,19 @@ export class AgentHost {
           await this.newSession();
           break;
         case "login":
-          // The provider login flow lives outside the host (Task 8); just open it.
-          this.post({ type: "login/open" });
+          this.post({ type: "login/open", providers: this.opts.loginProviders?.() ?? [] });
+          break;
+        case "login/apiKey":
+          await this.opts.onLogin?.apiKey(msg.envVar, msg.key);
+          break;
+        case "login/oauth":
+          await this.opts.onLogin?.oauthStart();
+          break;
+        case "login/oauthCode":
+          this.opts.onLogin?.oauthCode(msg.code);
+          break;
+        case "login/cancel":
+          this.opts.onLogin?.cancel();
           break;
         case "resumeSession": {
           try {

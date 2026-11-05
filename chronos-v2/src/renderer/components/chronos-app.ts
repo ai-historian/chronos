@@ -15,6 +15,8 @@ import type { ChronosDataViewer } from "./data-viewer";
 import "./chronos-chat";
 import "./page-viewer";
 import "./data-viewer";
+import "./provider-dialog";
+import type { ProviderOption, OauthStatusView } from "./provider-dialog";
 import brandIcon from "../assets/chronos-icon.png";
 
 interface Toast {
@@ -39,6 +41,8 @@ export class ChronosApp extends LitElement {
     sessionLoading: { state: true },
     viewerTab: { state: true },
     loginRequired: { state: true },
+    loginProviders: { state: true },
+    oauthStatus: { state: true },
   };
 
   declare state: RpcSessionState | null;
@@ -55,6 +59,9 @@ export class ChronosApp extends LitElement {
   declare sessionLoading: { title?: string; name: string; sizeBytes?: number } | null;
   declare viewerTab: "page" | "data";
   declare loginRequired: boolean;
+  /** Non-null while the provider dialog is open. */
+  declare loginProviders: ProviderOption[] | null;
+  declare oauthStatus: OauthStatusView | null;
 
   private postMessage: (msg: WebviewToExt) => void = () => {};
   private uiRequestQueue: RpcExtensionUIRequest[] = [];
@@ -85,6 +92,8 @@ export class ChronosApp extends LitElement {
     this.sessionLoading = null;
     this.viewerTab = "page";
     this.loginRequired = false;
+    this.loginProviders = null;
+    this.oauthStatus = null;
   }
 
   // Context occupancy = what the next request will carry: fresh input +
@@ -144,6 +153,19 @@ export class ChronosApp extends LitElement {
         break;
       case "loginRequired":
         this.loginRequired = msg.required;
+        break;
+      case "login/open":
+        this.oauthStatus = null;
+        this.loginProviders = msg.providers;
+        break;
+      case "login/oauthStatus":
+        if (msg.status === "done") {
+          this.loginProviders = null;
+          this.oauthStatus = null;
+          this.pushToast("info", msg.message ?? "Connected. Restarting agent…");
+        } else {
+          this.oauthStatus = { status: msg.status, message: msg.message };
+        }
         break;
       case "viewer/clearSource":
         // New session has no source bound — reset the display to match.
@@ -371,6 +393,17 @@ export class ChronosApp extends LitElement {
         </div>
         ${this.drawerOpen ? this.renderDrawer() : nothing}
         ${this.uiRequest ? this.renderUiRequest() : nothing}
+        ${this.loginProviders
+          ? html`<chronos-provider-dialog
+              .providers=${this.loginProviders}
+              .oauthStatus=${this.oauthStatus}
+              .post=${(m: WebviewToExt) => this.postMessage(m)}
+              @close=${() => {
+                this.loginProviders = null;
+                this.oauthStatus = null;
+              }}
+            ></chronos-provider-dialog>`
+          : nothing}
         ${this.sessionLoading ? this.renderSessionLoading() : nothing}
         ${this.toasts.length ? this.renderToasts() : nothing}
       </div>

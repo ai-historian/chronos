@@ -146,3 +146,29 @@ test("onStateChange fires after seeding and after setYolo", async () => {
     rmSync(ws, { recursive: true, force: true });
   }
 });
+
+test("login messages route to onLogin and login/open carries providers", async () => {
+  const posted: ExtToWebview[] = [];
+  const calls: string[] = [];
+  const host = new AgentHost({
+    workspaceDir: tmpdir(),
+    transport: { post: (m) => posted.push(m) },
+    launch: () => ({ bin: process.execPath, args: [], env: {} }),
+    imageUri: (p) => p,
+    loginProviders: () => [{ id: "anthropic", label: "Anthropic (Claude)", envVar: "ANTHROPIC_API_KEY" }],
+    onLogin: {
+      apiKey: async (envVar) => void calls.push(`apiKey:${envVar}`),
+      oauthStart: async () => void calls.push("oauth"),
+      oauthCode: (code) => void calls.push(`code:${code}`),
+      cancel: () => void calls.push("cancel"),
+    },
+  });
+  await host.handleWebviewMessage({ type: "login" });
+  const open = posted.find((m) => m.type === "login/open");
+  assert.ok(open && open.type === "login/open" && open.providers[0].id === "anthropic");
+  await host.handleWebviewMessage({ type: "login/apiKey", envVar: "ANTHROPIC_API_KEY", key: "sk-test" });
+  await host.handleWebviewMessage({ type: "login/oauth" });
+  await host.handleWebviewMessage({ type: "login/oauthCode", code: "c" });
+  await host.handleWebviewMessage({ type: "login/cancel" });
+  assert.deepEqual(calls, ["apiKey:ANTHROPIC_API_KEY", "oauth", "code:c", "cancel"]);
+});

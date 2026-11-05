@@ -2701,3 +2701,87 @@ chronos-data-viewer,
   background: var(--ch-brand-soft);
   opacity: 1;
 }
+
+/* ── provider login dialog ───────────────────────────────────────────────── */
+
+.provider-dialog {
+  top: 12%;
+}
+
+.provider-oauth-btn {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.provider-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ch-muted);
+}
+
+.provider-oauth-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--ch-border-soft);
+  border-radius: var(--ch-radius-sm);
+  background: var(--ch-surface-1);
+  line-height: 1.4;
+}
+
+.provider-oauth-status.is-error,
+.provider-error {
+  color: var(--vscode-errorForeground, #f14c4c);
+}
+
+.provider-error {
+  margin: -4px 0 12px;
+  font-size: 12px;
+}
+
+.provider-row {
+  margin-bottom: 4px;
+}
+
+.provider-code-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.provider-code-row .dialog-input {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.provider-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 11px;
+  color: var(--ch-muted);
+}
+
+.provider-divider::before,
+.provider-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--ch-border-soft);
+}
+
+.provider-label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.provider-select {
+  width: 100%;
+  margin-bottom: 12px;
+}

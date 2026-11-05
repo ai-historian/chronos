@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, shell } from "electron";
 import { statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveTheme, themeCss } from "./theme";
@@ -7,6 +7,7 @@ import { AgentHost } from "./agent-host";
 import { buildPiLaunch } from "./pi-launcher";
 import { resolveVendorPaths } from "./paths";
 import { registerChronosFileScheme, installChronosFileHandler, toChronosFileUrl } from "./protocol-handler";
+import { providerChoices, saveApiKey, startAnthropicOauth, submitAnthropicOauthCode, cancelAnthropicOauth } from "./login";
 import { RecentStore, pickFolderToCreate, pickWorkspaceToOpen } from "./workspace";
 import type { WebviewToExt, WelcomeToExt } from "../shared/webview-protocol";
 
@@ -138,6 +139,29 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
     onTitle: (t) => {
       if (!win.isDestroyed()) win.setTitle(t);
     },
+    loginProviders: providerChoices,
+    onLogin: {
+      apiKey: async (envVar, key) => {
+        saveApiKey(workspaceDir, envVar, key);
+        transport.post({ type: "notify", level: "info", message: `Saved ${envVar}. Restarting agent…` });
+        await host?.restart();
+      },
+      oauthStart: async () => {
+        try {
+          await startAnthropicOauth({
+            // pi's agent dir (PI_CODING_AGENT_DIR, see pi-launcher) — never ~/.pi.
+            authDir: join(app.getPath("userData"), "pi-agent"),
+            openExternal: (url) => shell.openExternal(url),
+            onStatus: (s) => transport.post({ type: "login/oauthStatus", ...s }),
+          });
+        } catch {
+          return; // already reported to the dialog via login/oauthStatus
+        }
+        await host?.restart();
+      },
+      oauthCode: submitAnthropicOauthCode,
+      cancel: cancelAnthropicOauth,
+    },
   });
   const h = host;
   win.webContents.once("did-finish-load", () => void h.start());
@@ -145,6 +169,7 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
   win.on("closed", () => {
     nativeTheme.off("updated", theme);
     ipcMain.off("chronos:msg", onMsg);
+    cancelAnthropicOauth();
     void host?.stop();
     if (mainWindow === win) mainWindow = undefined;
     currentWorkspace = undefined;

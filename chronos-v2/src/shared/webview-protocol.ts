@@ -56,8 +56,10 @@ export type ExtToWebview =
   | { type: "resumeResult"; ok: boolean }
   // auth: no models are available until the user connects a provider
   | { type: "loginRequired"; required: boolean }
-  // open the in-app provider login flow (Task 8 widens this with provider data)
-  | { type: "login/open" }
+  // open the in-app provider login dialog (id "other" = user names the env var)
+  | { type: "login/open"; providers: { id: string; label: string; envVar: string }[] }
+  // progress of the Claude-subscription OAuth sign-in
+  | { type: "login/oauthStatus"; status: "waiting" | "done" | "error"; message?: string }
   // new session: clear the viewer + source dropdown so display matches selection
   | { type: "viewer/clearSource" }
   // viewer (image URI already resolved via asWebviewUri)
@@ -95,6 +97,11 @@ export type WebviewToExt =
   | { type: "newSession" }
   // connect an AI provider: pick a provider, enter its API key, restart the agent
   | { type: "login" }
+  // provider dialog: save an API key (then restart), start / feed / cancel Claude OAuth
+  | { type: "login/apiKey"; envVar: string; key: string }
+  | { type: "login/oauth" }
+  | { type: "login/oauthCode"; code: string }
+  | { type: "login/cancel" }
   | { type: "resumeSession"; sessionPath: string }
   | { type: "setModel"; provider: string; modelId: string }
   | { type: "setThinkingLevel"; level: ThinkingLevel }
