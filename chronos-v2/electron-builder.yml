@@ -1,0 +1,57 @@
+# electron-builder config for the Chronos standalone app.
+# `npm run dist` = bundle-agent (vendor/) + esbuild (out/) + electron-builder.
+# Signing is electron-builder's default: only when CSC_LINK / CSC_KEY_PASSWORD are set.
+appId: org.ai-historian.chronos
+productName: Chronos
+
+directories:
+  output: dist
+  buildResources: resources
+
+# Production `dependencies` are auto-included from node_modules; mupdf is listed
+# explicitly because the import workers load it at runtime (it is external to esbuild).
+files:
+  - out/**
+  - package.json
+  - node_modules/mupdf/**
+  - resources/icon.png
+
+# Never enter the asar: the pi runtime + chronos agent (spawned with ELECTRON_RUN_AS_NODE)
+# and the third-party licence texts.
+extraResources:
+  - from: vendor
+    to: vendor
+  - from: resources/licenses
+    to: licenses
+
+# worker_threads cannot load scripts from inside an asar (see unpackedPath in src/main/paths.ts).
+asarUnpack:
+  - out/pdf-worker.js
+  - out/pdf-split-worker.js
+  - node_modules/mupdf/**
+
+linux:
+  target: [deb, AppImage]
+  category: Office
+  icon: resources/icon.png
+  maintainer: Lorenz Hufe <lorenz.hufe@posteo.de>
+
+mac:
+  target:
+    - target: dmg
+      arch: [universal]
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  notarize: false
+
+win:
+  target: [nsis]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+publish:
+  provider: github
+  owner: ai-historian
+  repo: chronos

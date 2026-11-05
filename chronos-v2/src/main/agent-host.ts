@@ -246,6 +246,7 @@ export class AgentHost {
       this.agentStatus = "starting";
       const state = await rpc.start();
       this.agentStatus = "ready";
+      console.log("[chronos] agent ready");
       this.seedWebview(state);
     } catch (err) {
       this.agentStatus = "failed";

@@ -3,6 +3,11 @@
   "productName": "Chronos",
   "version": "0.3.0",
   "description": "Chronos standalone app: AI agent for extracting structured data from scanned primary sources",
+  "homepage": "https://github.com/ai-historian/chronos",
+  "author": {
+    "name": "Lorenz Hufe",
+    "email": "lorenz.hufe@posteo.de"
+  },
   "private": true,
   "type": "commonjs",
   "main": "out/main.js",
@@ -15,7 +20,7 @@
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "start": "electron .",
     "dev": "npm run build && electron . --no-sandbox",
-    "dist": "npm run build && electron-builder",
+    "dist": "npm run bundle-agent && npm run build && electron-builder",
     "bundle-agent": "node scripts/bundle-agent.mjs",
     "canary": "node --import tsx scripts/rpc-canary.mjs"
   },

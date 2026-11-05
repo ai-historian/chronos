@@ -21,3 +21,13 @@ export function resolveVendorPaths(opts: { isPackaged: boolean; resourcesPath: s
     agentDir: join(opts.appRoot, "..", "chronos"),
   };
 }
+
+/**
+ * Packaged builds keep main.js inside app.asar, but worker scripts (and the
+ * mupdf they import) are asarUnpack'ed to app.asar.unpacked/ — a Worker cannot
+ * load from inside an asar. Maps `.../app.asar/...` to `.../app.asar.unpacked/...`;
+ * any other path is returned unchanged.
+ */
+export function unpackedPath(p: string): string {
+  return p.replace(/([\\/])app\.asar(?=[\\/])/, "$1app.asar.unpacked");
+}

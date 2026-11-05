@@ -1,0 +1,61 @@
+name: v2 release
+
+# Builds the Chronos standalone app installers (chronos-v2/) on each OS and
+# uploads them to a GitHub release for the pushed v2-* tag.
+on:
+  push:
+    tags: ["v2-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Installers (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: chronos-v2
+    env:
+      # Pin the download caches to one path on every OS so actions/cache can restore them.
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            chronos/package-lock.json
+            chronos-v2/package-lock.json
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            .cache/electron
+            .cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('chronos-v2/package-lock.json') }}
+
+      - name: Install
+        run: npm ci
+
+      # Populates vendor/ (pi runtime + the ../chronos agent with this OS's sharp prebuilds).
+      - name: Bundle agent
+        run: npm run bundle-agent
+
+      - name: Build
+        run: npm run build
+
+      - name: Package and publish
+        run: npx electron-builder --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

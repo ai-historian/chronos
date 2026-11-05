@@ -6,7 +6,7 @@ import { WindowTransport } from "./window-transport";
 import { AgentHost } from "./agent-host";
 import { TreeHost } from "./tree-host";
 import { buildPiLaunch } from "./pi-launcher";
-import { resolveVendorPaths } from "./paths";
+import { resolveVendorPaths, unpackedPath } from "./paths";
 import { registerChronosFileScheme, installChronosFileHandler, toChronosFileUrl } from "./protocol-handler";
 import { providerChoices, saveApiKey, startAnthropicOauth, submitAnthropicOauthCode, cancelAnthropicOauth } from "./login";
 import { RecentStore, pickFolderToCreate, pickWorkspaceToOpen } from "./workspace";
@@ -305,7 +305,9 @@ function setThemePref(t: "system" | ThemeName): void {
 let importRunning = false;
 
 function importWorkers(): { pdf: string; split: string } {
-  return { pdf: join(__dirname, "pdf-worker.js"), split: join(__dirname, "pdf-split-worker.js") };
+  // Packaged: main.js is inside app.asar, the workers are asarUnpack'ed beside it.
+  const at = (f: string) => (app.isPackaged ? unpackedPath(join(__dirname, f)) : join(__dirname, f));
+  return { pdf: at("pdf-worker.js"), split: at("pdf-split-worker.js") };
 }
 
 /** Progress events go to the window the import started in (not whichever is main later). */
@@ -550,6 +552,8 @@ function rebuildMenu(): void {
 app.whenReady().then(() => {
   recent = new RecentStore(join(app.getPath("userData"), "recent.json"));
   themePref = readAppSettings(app.getPath("userData")).theme;
+  const vendor = resolveVendorPaths({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appRoot: app.getAppPath() });
+  console.log(`[chronos] pi cli: ${vendor.piCli} (agent: ${vendor.agentDir})`);
   rebuildMenu();
   installChronosFileHandler(() => (currentWorkspace ? [currentWorkspace] : []));
   const fromArgv = workspaceFromArgv(process.argv);
