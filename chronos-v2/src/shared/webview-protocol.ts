@@ -118,3 +118,13 @@ export type WebviewToExt =
   | { type: "data/previewSource"; pageId: number; bbox: Bbox | null; sourcePath?: string }
   // test-only seam: the webview's state snapshot, in reply to __test/dump
   | { type: "__test/state"; state: unknown };
+
+// Welcome window (shown when no workspace is open). Shares the preload / window.chronos bridge.
+export type WelcomeToExt =
+  | { type: "workspace/open" }
+  | { type: "workspace/create" }
+  | { type: "workspace/openRecent"; path: string };
+
+export type ExtToWelcome =
+  | { type: "theme"; name: ThemeName; css: string }
+  | { type: "workspace/recent"; items: { path: string; openedAt: number }[] };
