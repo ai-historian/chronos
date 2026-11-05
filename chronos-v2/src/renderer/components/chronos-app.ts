@@ -12,7 +12,9 @@ import type {
 import type { ChronosChat } from "./chronos-chat";
 import type { ChronosPageViewer } from "./page-viewer";
 import type { ChronosDataViewer } from "./data-viewer";
+import type { ChronosFileTree } from "./file-tree";
 import "./chronos-chat";
+import "./file-tree";
 import "./page-viewer";
 import "./data-viewer";
 import "./provider-dialog";
@@ -53,6 +55,8 @@ export class ChronosApp extends LitElement {
     loginProviders: { state: true },
     oauthStatus: { state: true },
     chatHidden: { state: true },
+    treeWidth: { state: true },
+    treeHidden: { state: true },
     showPagePrompt: { state: true },
     progress: { state: true },
   };
@@ -75,6 +79,9 @@ export class ChronosApp extends LitElement {
   declare loginProviders: ProviderOption[] | null;
   declare oauthStatus: OauthStatusView | null;
   declare chatHidden: boolean;
+  /** File-tree pane width in px (160–480). */
+  declare treeWidth: number;
+  declare treeHidden: boolean;
   /** Non-null while the menu's "Show page…" prompt is open. */
   declare showPagePrompt: { source: string; page: string } | null;
   /** Running host tasks (source imports), keyed by progress id. */
@@ -92,6 +99,8 @@ export class ChronosApp extends LitElement {
   }
 
   private toastSeq = 0;
+  /** Expanded tree dirs from saved UI state, applied once the tree element exists. */
+  private restoredExpanded: string[] = [];
 
   constructor() {
     super();
@@ -112,6 +121,8 @@ export class ChronosApp extends LitElement {
     this.loginProviders = null;
     this.oauthStatus = null;
     this.chatHidden = false;
+    this.treeWidth = 240;
+    this.treeHidden = false;
     this.showPagePrompt = null;
     this.progress = new Map();
   }
@@ -133,12 +144,30 @@ export class ChronosApp extends LitElement {
     this.postMessage = fn;
   }
 
-  restoreUiState(saved: { splitPct?: number } | undefined): void {
+  restoreUiState(
+    saved: { splitPct?: number; treeWidth?: number; treeHidden?: boolean; expanded?: string[] } | undefined,
+  ): void {
     if (saved?.splitPct) this.splitPct = saved.splitPct;
+    if (typeof saved?.treeWidth === "number") this.treeWidth = ChronosApp.clampTree(saved.treeWidth);
+    if (typeof saved?.treeHidden === "boolean") this.treeHidden = saved.treeHidden;
+    if (Array.isArray(saved?.expanded)) this.restoredExpanded = saved.expanded.filter((p) => typeof p === "string");
   }
 
-  getUiState(): { splitPct: number } {
-    return { splitPct: this.splitPct };
+  getUiState(): { splitPct: number; treeWidth: number; treeHidden: boolean; expanded: string[] } {
+    return {
+      splitPct: this.splitPct,
+      treeWidth: this.treeWidth,
+      treeHidden: this.treeHidden,
+      expanded: this.tree?.expandedPaths() ?? this.restoredExpanded,
+    };
+  }
+
+  private static clampTree(px: number): number {
+    return Math.max(160, Math.min(480, Math.round(px)));
+  }
+
+  private get tree(): ChronosFileTree | null {
+    return this.querySelector("chronos-file-tree");
   }
 
   private get chat(): ChronosChat | null {
@@ -252,8 +281,18 @@ export class ChronosApp extends LitElement {
         this.openHistoryDrawer();
         break;
       case "ui/toggle":
-        // "tree": no-op until the file-tree pane lands (Task 11); message is handled so the menu item is wired.
         if (msg.pane === "chat") this.chatHidden = !this.chatHidden;
+        else this.treeHidden = !this.treeHidden;
+        this.dispatchEvent(new CustomEvent("ui-state-changed", { bubbles: true }));
+        break;
+      case "tree":
+        this.tree?.setRoot(msg.root, msg.entries);
+        break;
+      case "tree/children":
+        this.tree?.setChildren(msg.path, msg.entries);
+        break;
+      case "tree/changed":
+        this.tree?.applyChange(msg);
         break;
       case "ui/promptShowPage":
         this.showPagePrompt = { source: this.currentSource || this.sources[0]?.name || "", page: "1" };
@@ -408,9 +447,31 @@ export class ChronosApp extends LitElement {
     `;
   }
 
+  private onTreeSplitterDown(e: PointerEvent): void {
+    e.preventDefault();
+    const pane = this.querySelector<HTMLElement>("#pane-tree");
+    if (!pane) return;
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const left = pane.getBoundingClientRect().left;
+    const onMove = (ev: PointerEvent) => {
+      this.treeWidth = ChronosApp.clampTree(ev.clientX - left);
+    };
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("lostpointercapture", onUp);
+      this.dispatchEvent(new CustomEvent("ui-state-changed", { bubbles: true }));
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("lostpointercapture", onUp);
+  }
+
   private onSplitterDown(e: PointerEvent): void {
     e.preventDefault();
-    const root = this.querySelector<HTMLElement>("#app-main");
+    // splitPct is the viewer's share of the viewer+chat area (excludes the tree pane).
+    const root = this.querySelector<HTMLElement>("#app-panes");
     if (!root) return;
     // Capture on the splitter so a pointerup released outside the webview still
     // tears the listeners down (a missed window pointerup would leak onMove).
@@ -440,6 +501,11 @@ export class ChronosApp extends LitElement {
         ${this.progress.size ? this.renderProgress() : nothing}
         ${this.loginRequired ? this.renderLoginBanner() : nothing}
         <div id="app-main">
+          <div id="pane-tree" ?hidden=${this.treeHidden} style="flex-basis:${this.treeWidth}px">
+            <chronos-file-tree .currentSource=${this.currentSource}></chronos-file-tree>
+          </div>
+          ${this.treeHidden ? nothing : html`<div id="splitter-tree" @pointerdown=${this.onTreeSplitterDown} title="Drag to resize"></div>`}
+          <div id="app-panes">
           <div id="pane-viewer" style="flex-basis:${this.chatHidden ? 100 : this.splitPct}%">
             <div class="pv-tabs">
               <button class="pv-tab ${this.viewerTab === "page" ? "is-active" : ""}" @click=${() => (this.viewerTab = "page")}>Page</button>
@@ -456,6 +522,7 @@ export class ChronosApp extends LitElement {
           ${this.chatHidden ? nothing : html`<div id="splitter" @pointerdown=${this.onSplitterDown} title="Drag to resize"></div>`}
           <div id="pane-chat" ?hidden=${this.chatHidden} style="flex-basis:${100 - this.splitPct}%">
             <chronos-chat></chronos-chat>
+          </div>
           </div>
         </div>
         ${this.drawerOpen ? this.renderDrawer() : nothing}
@@ -754,6 +821,11 @@ export class ChronosApp extends LitElement {
     this.chat?.setPostMessage((msg) => this.postMessage(msg));
     this.viewer?.setPostMessage((msg) => this.postMessage(msg));
     this.dataViewer?.setPostMessage((msg) => this.postMessage(msg));
+    const tree = this.tree;
+    if (tree) {
+      tree.setPostMessage((msg) => this.postMessage(msg));
+      if (this.restoredExpanded.length) tree.restoreExpanded(this.restoredExpanded);
+    }
     this.addEventListener("rewind-start", (e) => {
       const preview = (e as CustomEvent).detail?.preview ?? "";
       this.sessionLoading = {

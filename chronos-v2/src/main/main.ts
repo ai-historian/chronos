@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { resolveTheme, themeCss, type ThemeName } from "./theme";
 import { WindowTransport } from "./window-transport";
 import { AgentHost } from "./agent-host";
+import { TreeHost } from "./tree-host";
 import { buildPiLaunch } from "./pi-launcher";
 import { resolveVendorPaths } from "./paths";
 import { registerChronosFileScheme, installChronosFileHandler, toChronosFileUrl } from "./protocol-handler";
@@ -132,8 +133,15 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
   nativeTheme.on("updated", theme);
 
   let host: AgentHost | undefined;
+  const tree = new TreeHost({
+    root: workspaceDir,
+    transport,
+    showPage: (sourceName, pageId) => host?.showPageById(sourceName, pageId),
+  });
   const onMsg = (e: Electron.IpcMainEvent, msg: WebviewToExt) => {
     if (e.sender !== win.webContents) return;
+    // File-tree / file messages first; everything else is the agent host's.
+    if (tree.handle(msg)) return;
     void host?.handleWebviewMessage(msg);
   };
   ipcMain.on("chronos:msg", onMsg);
@@ -190,6 +198,8 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
     rebuildMenu();
   });
   rebuildMenu();
+  // Every (re)load gets a fresh root listing; the watcher dedupes already-watched dirs.
+  win.webContents.on("did-finish-load", () => tree.start());
   win.webContents.once("did-finish-load", () => {
     void h.start();
     void promptRecoverIncompleteImports(win, h, workspaceDir);
@@ -200,6 +210,7 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
     ipcMain.off("chronos:msg", onMsg);
     cancelAnthropicOauth();
     unsubscribe();
+    tree.stop();
     void host?.stop();
     if (activeHost === h) activeHost = undefined;
     if (mainWindow === win) {

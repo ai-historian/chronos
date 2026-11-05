@@ -2870,3 +2870,189 @@ chronos-data-viewer,
     animation: none;
   }
 }
+
+/* ── workspace file tree (left pane) ─────────────────────────────────────── */
+
+#app-panes {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+#pane-tree {
+  flex: 0 0 auto;
+  min-width: 160px;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--ch-surface-1);
+  animation: enter-fade 480ms ease 40ms both;
+}
+
+#pane-tree[hidden] {
+  display: none;
+}
+
+#splitter-tree {
+  flex: 0 0 4px;
+  cursor: col-resize;
+  background: transparent;
+  border-left: 1px solid var(--ch-border);
+  transition: background 120ms ease;
+}
+
+#splitter-tree:hover,
+#splitter-tree:active {
+  background: color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent);
+}
+
+chronos-file-tree {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  font-family: var(--ch-ui);
+  font-size: 12.5px;
+  color: var(--ch-fg);
+}
+
+.ft-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  height: 32px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--ch-border-soft);
+}
+
+.ft-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ch-muted);
+}
+
+.ft-refresh {
+  flex: 0 0 auto;
+}
+
+.ft-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0 12px;
+  outline: none;
+}
+
+.ft-list:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--vscode-focusBorder);
+}
+
+.ft-empty {
+  padding: 10px 12px;
+  color: var(--ch-muted);
+}
+
+.ft-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding-right: 8px;
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.ft-row:hover {
+  background: var(--vscode-editorWidget-background, var(--ch-surface-2));
+}
+
+.ft-row.is-selected {
+  background: color-mix(in srgb, var(--vscode-button-background) 25%, transparent);
+}
+
+.ft-twisty {
+  flex: 0 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ch-muted);
+}
+
+.ft-chevron {
+  transition: transform 120ms ease;
+}
+
+.ft-row.is-expanded .ft-chevron {
+  transform: rotate(90deg);
+}
+
+.ft-icon {
+  flex: 0 0 auto;
+  color: var(--ch-muted);
+}
+
+.ft-row.is-dir .ft-icon {
+  color: var(--ch-fg);
+  opacity: 0.8;
+}
+
+.ft-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ft-row.is-active-source .ft-name {
+  font-weight: 600;
+}
+
+.ft-source-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: var(--ch-accent);
+}
+
+.ft-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--ch-border);
+  border-radius: var(--ch-radius);
+  background: var(--vscode-editorWidget-background, var(--ch-bg));
+  box-shadow: var(--ch-shadow-1);
+  display: flex;
+  flex-direction: column;
+}
+
+.ft-menu-item {
+  all: unset;
+  padding: 5px 10px;
+  border-radius: var(--ch-radius-sm);
+  font-size: 12.5px;
+  color: var(--ch-fg);
+  cursor: default;
+}
+
+.ft-menu-item:hover,
+.ft-menu-item:focus-visible {
+  background: color-mix(in srgb, var(--vscode-button-background) 25%, transparent);
+}
+
+.ft-menu-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--ch-border-soft);
+}

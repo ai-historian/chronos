@@ -12,6 +12,9 @@ import type {
   RpcSlashCommand,
   ThinkingLevel,
 } from "../main/rpc/rpc-types";
+import type { TreeEntry } from "../renderer/tree-model";
+
+export type { TreeEntry };
 
 export interface Bbox {
   x: number;
@@ -91,6 +94,11 @@ export type ExtToWebview =
   | { type: "ui/openDrawer"; drawer: "history" }
   | { type: "ui/toggle"; pane: "tree" | "chat" }
   | { type: "ui/promptShowPage" }
+  // workspace file tree: root listing, a dir's children (reply to tree/expand), watcher changes.
+  // `entry` accompanies `add` so a new directory renders as one.
+  | { type: "tree"; root: string; entries: TreeEntry[] }
+  | { type: "tree/children"; path: string; entries: TreeEntry[] }
+  | { type: "tree/changed"; path: string; kind: "add" | "unlink" | "change"; entry?: TreeEntry }
   // test-only seam (integration tests): simulate a user action / request a state snapshot
   | { type: "__test/invoke"; action: string; arg?: string }
   | { type: "__test/dump" };
@@ -116,6 +124,13 @@ export type WebviewToExt =
   | { type: "refreshSources" }
   // import sources into the workspace (file-tree context menu; same flow as File ▸ Import)
   | { type: "workspace/import" }
+  // workspace file tree (paths are absolute, validated against the workspace in main)
+  | { type: "tree/expand"; path: string }
+  | { type: "tree/collapse"; path: string }
+  | { type: "tree/refresh" }
+  | { type: "file/open"; path: string }
+  | { type: "file/revealInOs"; path: string }
+  | { type: "file/copyPath"; path: string }
   | { type: "uiResponse"; response: RpcExtensionUIResponse }
   | { type: "permissionResponse"; id: string; action: "allow" | "always" | "deny"; prefix?: string }
   // edit a past user message: fork the session to just before it, then send
