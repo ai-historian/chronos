@@ -23,6 +23,9 @@
     "sharp": "^0.34.5"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.79.10",
+    "@earendil-works/pi-coding-agent": "0.79.10",
+    "@sinclair/typebox": "0.34.48",
     "@types/node": "^22.0.0",
     "@types/sharp": "^0.31.1",
     "tsx": "^4.19.0",

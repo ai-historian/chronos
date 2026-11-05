@@ -47,6 +47,25 @@ The `.vsix` is published on [GitHub Releases](https://github.com/ai-historian/ch
 
 </details>
 
+## Fork installation fix
+
+This fork fixes `TS2307: Cannot find module '@earendil-works/pi-coding-agent'`
+when npm skips peer dependencies (for example with `legacy-peer-deps=true`).
+The pi SDK and TypeBox remain peer dependencies for the host, and are also
+explicit, version-pinned development dependencies for the TypeScript build.
+The versions match the upstream lockfile.
+
+To use this fork in VS Code, set **Chronos: Pi Package Source**
+(`chronos.piPackageSource`) to `https://github.com/StephanMa/chronos`, then run
+**Chronos: Install Dependencies**. For manual installation:
+
+```bash
+pi install https://github.com/StephanMa/chronos
+```
+
+This fix covers dependency installation and compilation against pi 0.79.10;
+it does not establish compatibility with newer major versions of pi.
+
 ## Getting started
 
 Every Chronos action lives in the Command Palette — press `Ctrl+Shift+P` and type *chronos*.
