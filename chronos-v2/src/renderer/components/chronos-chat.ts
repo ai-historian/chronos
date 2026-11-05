@@ -9,6 +9,7 @@ import type {
   RpcSessionState,
   RpcSlashCommand,
 } from "../../main/rpc/rpc-types";
+import { StreamAssembler } from "../stream-assembler";
 import type { WebviewToExt } from "../../shared/webview-protocol";
 
 type ToolItem = {
@@ -394,6 +395,25 @@ export class ChronosChat extends LitElement {
     }
   }
 
+  private assembler = new StreamAssembler();
+
+  private replaceLastAssistant(message: AssistantMessage, streaming: boolean): void {
+    let idx = -1;
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      if (this.items[i].kind === "assistant") {
+        idx = i;
+        break;
+      }
+    }
+    if (idx === -1) {
+      this.items = [...this.items, { kind: "assistant", message, streaming }];
+    } else {
+      const items = [...this.items];
+      items[idx] = { kind: "assistant", message, streaming };
+      this.items = items;
+    }
+  }
+
   handleAgentEvent(event: AgentEvent): void {
     switch (event.type) {
       case "agent_start":
@@ -408,6 +428,7 @@ export class ChronosChat extends LitElement {
       case "message_start": {
         const msg = event.message;
         if (msg.role === "assistant") {
+          this.assembler.start(msg as AssistantMessage);
           this.items = [...this.items, { kind: "assistant", message: msg as AssistantMessage, streaming: true }];
         } else if (msg.role === "user") {
           const text = messageText((msg as { content: any }).content);
@@ -418,27 +439,15 @@ export class ChronosChat extends LitElement {
         }
         break;
       }
-      case "message_update":
-        // TODO(task-2b): assemble from assistantMessageEvent deltas
+      case "message_update": {
+        const message = this.assembler.apply(event.assistantMessageEvent, event.usage);
+        if (!message) break;
+        this.replaceLastAssistant(message, true);
         break;
+      }
       case "message_end": {
         if (event.message.role !== "assistant") break;
-        const message = event.message as AssistantMessage;
-        let idx = -1;
-        for (let i = this.items.length - 1; i >= 0; i--) {
-          if (this.items[i].kind === "assistant") {
-            idx = i;
-            break;
-          }
-        }
-        const streaming = event.type !== "message_end";
-        if (idx === -1) {
-          this.items = [...this.items, { kind: "assistant", message, streaming }];
-        } else {
-          const items = [...this.items];
-          items[idx] = { kind: "assistant", message, streaming };
-          this.items = items;
-        }
+        this.replaceLastAssistant(this.assembler.end(event.message as AssistantMessage), false);
         break;
       }
       case "tool_execution_start":

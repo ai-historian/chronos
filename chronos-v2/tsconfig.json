@@ -9,5 +9,5 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/main", "src/preload", "src/shared", "test", "scripts"]
+  "include": ["src/main", "src/preload", "src/shared", "src/renderer/stream-assembler.ts", "test", "scripts"]
 }
