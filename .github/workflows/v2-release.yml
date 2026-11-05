@@ -15,8 +15,15 @@ jobs:
     name: Installers (${{ matrix.os }})
     strategy:
       fail-fast: false
+      # vendor/ carries the sharp/@img native prebuilds of the runner that ran bundle-agent,
+      # so every installer is built on a runner of its own OS *and* arch: no universal or
+      # cross-arch mac builds (macos-latest is arm64, macos-13 is x64).
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - { os: ubuntu-latest, args: "--linux" }
+          - { os: windows-latest, args: "--win" }
+          - { os: macos-latest, args: "--mac --arm64" }
+          - { os: macos-13, args: "--mac --x64" }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -43,7 +50,7 @@ jobs:
             ~/.cache/electron-builder
             .cache/electron
             .cache/electron-builder
-          key: electron-${{ runner.os }}-${{ hashFiles('chronos-v2/package-lock.json') }}
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('chronos-v2/package-lock.json') }}
 
       - name: Install
         run: npm ci
@@ -56,6 +63,6 @@ jobs:
         run: npm run build
 
       - name: Package and publish
-        run: npx electron-builder --publish always
+        run: npx electron-builder ${{ matrix.args }} --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

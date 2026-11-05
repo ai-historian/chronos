@@ -47,6 +47,9 @@ mkdirSync(piDest, { recursive: true });
 for (const entry of ["package.json", "dist", "node_modules"]) {
   cpSync(join(piSrc, entry), join(piDest, entry), { recursive: true, dereference: true });
 }
+// cpSync copies node_modules/.bin's symlinks with absolute targets into this build
+// tree; they would dangle (and leak the build path) in the installed app. pi needs none.
+rmSync(join(piDest, "node_modules", ".bin"), { recursive: true, force: true });
 console.log(`vendored pi ${piPkg.version} -> ${piDest}`);
 
 // --- chronos agent ------------------------------------------------------

@@ -32,14 +32,27 @@ asarUnpack:
 
 linux:
   target: [deb, AppImage]
+  # Without these the deb/AppImage binary and .desktop entry take package.json "name" (chronos-v2).
+  executableName: chronos
+  desktop:
+    entry:
+      Name: Chronos
   category: Office
   icon: resources/icon.png
   maintainer: Lorenz Hufe <lorenz.hufe@posteo.de>
 
+deb:
+  packageName: chronos
+  artifactName: "chronos_${version}_${arch}.${ext}"
+
+# Single-arch only: vendor/chronos/node_modules holds the sharp/@img prebuilds of the
+# machine that ran bundle-agent, so a universal (or cross-arch) dmg would ship the wrong
+# native binaries. The arch comes from the CLI (--arm64 / --x64) and each dmg is built on
+# a runner of that arch (see .github/workflows/v2-release.yml).
 mac:
-  target:
-    - target: dmg
-      arch: [universal]
+  target: [dmg]
+  # dmg-builder drops the arch from the default name for x64; force it so both dmgs differ.
+  artifactName: "${productName}-${version}-${arch}.${ext}"
   category: public.app-category.productivity
   hardenedRuntime: true
   notarize: false
