@@ -8,6 +8,7 @@ chronos-vscode/.vscode-test/
 *.tgz
 *.vsix
 *.html
+!chronos-v2/**/*.html
 paper.md
 win-vm.md
 soduco/
