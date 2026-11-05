@@ -22,6 +22,7 @@ import "./center-tabs";
 import "./code-editor";
 import type { ChronosCodeEditor } from "./code-editor";
 import { TabsModel, type Tab } from "../tabs-model";
+import { SaveQueue, type SaveRequest } from "../save-queue";
 import type { ProviderOption, OauthStatusView } from "./provider-dialog";
 import brandIcon from "../assets/chronos-icon.png";
 
@@ -36,7 +37,8 @@ interface ProgressEntry {
 
 /** A pending center-tab decision: a dirty tab being closed, or a save refused because the file changed on disk. */
 interface FileModal {
-  kind: "close" | "conflict";
+  /** unload: the window is closing with dirty tabs (id unused). */
+  kind: "close" | "conflict" | "unload";
   id: string;
 }
 
@@ -125,8 +127,8 @@ export class ChronosApp extends LitElement {
   private pendingReload = new Set<string>();
   /** Paths to close once their in-flight save succeeds. */
   private pendingClose = new Set<string>();
-  /** Content sent with the in-flight save, per path (becomes the saved baseline on success). */
-  private savingContent = new Map<string, string>();
+  /** In-flight / queued saves per path. */
+  private saves = new SaveQueue();
   /** Persisted tabs still being re-opened, and the tab to re-activate once it is back. */
   private restoringPaths = new Map<string, SavedTab["kind"]>();
   private restoredActive: string | null = null;
@@ -543,29 +545,39 @@ export class ChronosApp extends LitElement {
     if (tab.kind !== "editor" || !tab.path) return;
     const editor = this.editorFor(tab.path);
     if (!editor || this.tabContent.get(tab.path)?.readOnly) return;
-    const content = editor.getContent();
-    this.savingContent.set(tab.path, content);
-    this.postMessage({ type: "file/save", path: tab.path, content, expectedMtimeMs: force ? -1 : tab.mtimeMs ?? -1 });
+    // One save in flight per path; a repeat Ctrl+S queues and is sent after the reply with the new mtime.
+    const req = this.saves.request(tab.path, { content: editor.getContent(), force });
+    if (req) this.sendSave(tab, req);
+  }
+
+  private sendSave(tab: Tab, req: SaveRequest): void {
+    this.postMessage({ type: "file/save", path: tab.path!, content: req.content, expectedMtimeMs: req.force ? -1 : tab.mtimeMs ?? -1 });
   }
 
   private onFileSaved(msg: Extract<ExtToWebview, { type: "file/saved" }>): void {
+    const { written, next } = this.saves.settle(msg.path, msg.ok);
     const tab = this.tabs.tabs.find((t) => t.path === msg.path);
-    const content = this.savingContent.get(msg.path);
-    this.savingContent.delete(msg.path);
     if (!tab) return;
     if (msg.ok) {
       if (typeof msg.mtimeMs === "number") this.tabs.setMtime(tab.id, msg.mtimeMs);
-      const editor = this.editorFor(msg.path);
-      if (content !== undefined) {
-        this.tabContent.set(msg.path, { content, readOnly: false });
-        editor?.setSavedContent(content); // emits dirty-changed if typing continued meanwhile
+      // Only what this save actually wrote becomes the clean baseline.
+      if (written !== undefined) {
+        const editor = this.editorFor(msg.path);
+        this.tabContent.set(msg.path, { content: written, readOnly: false });
+        editor?.setSavedContent(written); // emits dirty-changed against the new baseline
+        // Typing during the round trip leaves the tab dirty.
+        this.tabs.markDirty(tab.id, editor ? editor.getContent() !== written : false);
       }
-      // Typing during the round trip leaves the tab dirty against the new baseline.
-      if (!editor || content === undefined || editor.getContent() === content) this.tabs.markDirty(tab.id, false);
-      if (this.pendingClose.delete(msg.path)) this.tabs.forceClose(tab.id);
+      if (next) {
+        this.sendSave(tab, next);
+      } else if (!tab.dirty && this.pendingClose.delete(msg.path)) {
+        this.closeTabNow(tab.id);
+      }
       this.tabsChanged();
+      if (!next) this.continueWindowClose();
       return;
     }
+    this.closingWindow = false; // a failed save aborts "Save all and close"
     if (msg.error === "changed-on-disk") {
       // A pending close survives into the conflict modal: Overwrite still closes afterwards.
       this.tabs.activate(tab.id);
@@ -577,20 +589,76 @@ export class ChronosApp extends LitElement {
     }
   }
 
-  private requestClose(id: string): void {
-    const r = this.tabs.close(id);
-    if (r === "needs-confirm") {
-      this.tabs.activate(id);
-      this.fileModal = { kind: "close", id };
-    } else if (r === "closed" && !this.tabs.tabs.some((t) => t.path === id)) {
-      this.tabContent.delete(id);
+  /** Close a tab regardless of dirty state and release its editor (CodeMirror's global listeners). */
+  private closeTabNow(id: string): void {
+    const tab = this.tabs.get(id);
+    if (!tab || tab.kind === "page" || tab.kind === "data") return;
+    if (tab.path) {
+      this.editorFor(tab.path)?.destroy();
+      this.tabContent.delete(tab.path);
+      this.saves.clear(tab.path);
+      this.pendingClose.delete(tab.path);
+      this.pendingReload.delete(tab.path);
     }
+    this.tabs.forceClose(id);
     this.tabsChanged();
   }
 
-  private resolveFileModal(choice: "save" | "discard" | "overwrite" | "reload" | "cancel"): void {
+  private requestClose(id: string): void {
+    const tab = this.tabs.get(id);
+    if (!tab) return;
+    if (tab.kind === "page" || tab.kind === "data") return;
+    if (tab.dirty) {
+      this.tabs.activate(id);
+      this.fileModal = { kind: "close", id };
+      this.tabsChanged();
+      return;
+    }
+    this.closeTabNow(id);
+  }
+
+  // ── closing the window with unsaved edits ─────────────────────────────────
+
+  /** Set once the user chose how to handle unsaved edits; lets beforeunload pass. */
+  private allowUnload = false;
+  /** "Save all" is running: close the window once every save has landed. */
+  private closingWindow = false;
+
+  private dirtyTabs(): Tab[] {
+    return this.tabs.tabs.filter((t) => t.dirty);
+  }
+
+  private readonly onBeforeUnload = (e: BeforeUnloadEvent): void => {
+    if (this.allowUnload || this.dirtyTabs().length === 0) return;
+    // Electron cancels the close silently; ask in-app instead.
+    e.preventDefault();
+    e.returnValue = false as unknown as string;
+    if (!this.fileModal) this.fileModal = { kind: "unload", id: "" };
+  };
+
+  private closeWindow(): void {
+    this.allowUnload = true;
+    this.closingWindow = false;
+    this.postMessage({ type: "window/close" });
+  }
+
+  private continueWindowClose(): void {
+    if (this.closingWindow && !this.saves.busy && this.dirtyTabs().length === 0) this.closeWindow();
+  }
+
+  private resolveFileModal(choice: "save" | "discard" | "overwrite" | "reload" | "cancel" | "saveAll"): void {
     const modal = this.fileModal;
     this.fileModal = null;
+    if (modal?.kind === "unload") {
+      if (choice === "discard") {
+        this.closeWindow();
+      } else if (choice === "saveAll") {
+        this.closingWindow = true;
+        for (const t of this.dirtyTabs()) this.saveTab(t);
+        this.continueWindowClose();
+      }
+      return;
+    }
     const tab = modal ? this.tabs.get(modal.id) : undefined;
     if (!modal || !tab?.path) return;
     switch (choice) {
@@ -599,9 +667,7 @@ export class ChronosApp extends LitElement {
         this.saveTab(tab);
         break;
       case "discard":
-        this.tabs.forceClose(tab.id);
-        this.tabContent.delete(tab.path);
-        this.tabsChanged();
+        this.closeTabNow(tab.id);
         break;
       case "overwrite":
         this.saveTab(tab, true);
@@ -611,7 +677,7 @@ export class ChronosApp extends LitElement {
         this.pendingReload.add(tab.path);
         this.postMessage({ type: "file/open", path: tab.path });
         break;
-      case "cancel":
+      default:
         this.pendingClose.delete(tab.path);
         break;
     }
@@ -619,26 +685,36 @@ export class ChronosApp extends LitElement {
 
   private renderFileModal(): TemplateResult {
     const modal = this.fileModal!;
-    const tab = this.tabs.get(modal.id);
-    const name = tab?.title ?? "";
-    const conflict = modal.kind === "conflict";
+    const name = this.tabs.get(modal.id)?.title ?? "";
+    let title: string;
+    let text: string;
+    let actions: TemplateResult;
+    if (modal.kind === "conflict") {
+      title = `${name} changed on disk`;
+      text = "The file was modified (perhaps by the agent) after you opened it. Overwrite it with your version, or reload the version on disk and discard your edits?";
+      actions = html`<button class="btn-secondary" @click=${() => this.resolveFileModal("reload")}>Reload</button>
+        <button class="btn-send" @click=${() => this.resolveFileModal("overwrite")}>Overwrite</button>`;
+    } else if (modal.kind === "unload") {
+      const files = this.dirtyTabs().map((t) => t.title);
+      title = "You have unsaved changes";
+      text = `Unsaved: ${files.join(", ")}. Your changes will be lost if you don't save them.`;
+      actions = html`<button class="btn-secondary" @click=${() => this.resolveFileModal("discard")}>Don't save</button>
+        <button class="btn-send" @click=${() => this.resolveFileModal("saveAll")}>Save all</button>`;
+    } else {
+      title = `Save changes to ${name}?`;
+      text = "Your changes will be lost if you don't save them.";
+      actions = html`<button class="btn-secondary" @click=${() => this.resolveFileModal("discard")}>Don't save</button>
+        <button class="btn-send" @click=${() => this.resolveFileModal("save")}>Save</button>`;
+    }
     return html`
       <div class="dialog-backdrop"></div>
       <div class="dialog file-modal" role="alertdialog" aria-modal="true"
         @keydown=${(e: KeyboardEvent) => { if (e.key === "Escape") this.resolveFileModal("cancel"); }}>
-        <div class="dialog-title">${conflict ? `${name} changed on disk` : `Save changes to ${name}?`}</div>
-        <div class="file-modal-text">
-          ${conflict
-            ? "The file was modified (perhaps by the agent) after you opened it. Overwrite it with your version, or reload the version on disk and discard your edits?"
-            : "Your changes will be lost if you don't save them."}
-        </div>
+        <div class="dialog-title">${title}</div>
+        <div class="file-modal-text">${text}</div>
         <div class="dialog-actions">
           <button class="btn-secondary" @click=${() => this.resolveFileModal("cancel")}>Cancel</button>
-          ${conflict
-            ? html`<button class="btn-secondary" @click=${() => this.resolveFileModal("reload")}>Reload</button>
-                <button class="btn-send" @click=${() => this.resolveFileModal("overwrite")}>Overwrite</button>`
-            : html`<button class="btn-secondary" @click=${() => this.resolveFileModal("discard")}>Don't save</button>
-                <button class="btn-send" @click=${() => this.resolveFileModal("save")}>Save</button>`}
+          ${actions}
         </div>
       </div>
     `;
@@ -686,11 +762,13 @@ export class ChronosApp extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener("keydown", this.onGlobalKeydown);
+    window.addEventListener("beforeunload", this.onBeforeUnload);
   }
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener("keydown", this.onGlobalKeydown);
+    window.removeEventListener("beforeunload", this.onBeforeUnload);
   }
 
   // ── splitter ──────────────────────────────────────────────────────────────

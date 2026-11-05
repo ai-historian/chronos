@@ -2,7 +2,7 @@
 import { accessSync, constants as fsConstants, realpathSync, statSync } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isAllowedPath } from "./protocol-handler";
-import { DirWatcher, listDir, readText, writeText, type DirChange, type TreeEntry } from "./files";
+import { DirWatcher, isUtf8File, listDir, readText, writeText, type DirChange, type TreeEntry } from "./files";
 import type { Transport } from "./transport";
 import type { WebviewToExt } from "../shared/webview-protocol";
 
@@ -137,6 +137,11 @@ export class TreeHost {
           this.opts.transport.post({ type: "file/saved", path: msg.path, ok: false, error: "This file cannot be saved here" });
           return true;
         }
+        if (!isUtf8File(p.real)) {
+          // Opened read-only (Latin-1 view); writing UTF-8 back would corrupt its characters.
+          this.opts.transport.post({ type: "file/saved", path: msg.path, ok: false, error: "File is not UTF-8; it was opened read-only" });
+          return true;
+        }
         const expected = typeof msg.expectedMtimeMs === "number" ? msg.expectedMtimeMs : undefined;
         const r = writeText(p.real, msg.content, expected);
         this.opts.transport.post(
@@ -222,8 +227,10 @@ export class TreeHost {
     // Replies carry the logical (requested) path: it keys the renderer's tab.
     if (this.isTextFile(p)) {
       try {
-        const { content, mtimeMs } = readText(p);
-        this.opts.transport.post({ type: "file/content", path: logical, content, mtimeMs, readOnly: !this.writable(p), kind: "text" });
+        const { content, mtimeMs, encoding } = readText(p);
+        const utf8 = encoding === "utf-8";
+        this.opts.transport.post({ type: "file/content", path: logical, content, mtimeMs, readOnly: !utf8 || !this.writable(p), kind: "text" });
+        if (!utf8) this.opts.transport.post({ type: "notify", level: "warning", message: "Opened read-only: file is not UTF-8" });
       } catch (e) {
         this.opts.transport.post({ type: "notify", level: "error", message: `Could not open file: ${(e as Error).message}` });
       }

@@ -9,5 +9,5 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/main", "src/preload", "src/shared", "src/renderer/stream-assembler.ts", "src/renderer/tree-model.ts", "src/renderer/tabs-model.ts", "test", "scripts"]
+  "include": ["src/main", "src/preload", "src/shared", "src/renderer/stream-assembler.ts", "src/renderer/tree-model.ts", "src/renderer/tabs-model.ts", "src/renderer/save-queue.ts", "test", "scripts"]
 }

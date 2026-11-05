@@ -35,6 +35,10 @@ export class ChronosCodeEditor extends LitElement {
   declare readOnly: boolean;
 
   private view: EditorView | null = null;
+  /** State kept across a disconnect so a reparented editor (keyed repeat moves) comes back intact. */
+  private parked: EditorState | null = null;
+  /** destroy() was called: the tab is closed for good. */
+  private closed = false;
   private saved: Text | null = null;
   private dirty = false;
   private readonly theme = new Compartment();
@@ -54,12 +58,34 @@ export class ChronosCodeEditor extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener("chronos-theme-changed", this.onTheme);
+    // Re-attached after a disconnect that destroyed the view: rebuild it from the parked state.
+    const parent = this.querySelector<HTMLElement>(".ce-root");
+    if (!this.view && this.parked && parent && !this.closed) {
+      this.view = new EditorView({ parent, state: this.parked });
+      this.parked = null;
+    }
     this.onTheme();
   }
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener("chronos-theme-changed", this.onTheme);
+    // CodeMirror registers window/document listeners; release them unless this is just a move
+    // (a keyed repeat re-inserts the node synchronously, so check after the current task).
+    queueMicrotask(() => {
+      if (this.isConnected || !this.view) return;
+      this.parked = this.view.state;
+      this.view.destroy();
+      this.view = null;
+    });
+  }
+
+  /** Tear the editor down for good (its tab was closed). */
+  destroy(): void {
+    this.closed = true;
+    this.parked = null;
+    this.view?.destroy();
+    this.view = null;
   }
 
   render(): TemplateResult {
@@ -67,6 +93,7 @@ export class ChronosCodeEditor extends LitElement {
   }
 
   protected firstUpdated(): void {
+    if (this.closed) return;
     const parent = this.querySelector<HTMLElement>(".ce-root")!;
     this.view = new EditorView({ parent, state: this.makeState(this.content) });
     this.saved = this.view.state.doc;
@@ -74,22 +101,27 @@ export class ChronosCodeEditor extends LitElement {
 
   /** The current document text (with the file's original line separator). */
   getContent(): string {
-    return this.view ? this.view.state.sliceDoc() : this.content;
+    const state = this.view?.state ?? this.parked;
+    return state ? state.sliceDoc() : this.content;
   }
 
   /** Record `content` as what is on disk now (after a successful save). */
   setSavedContent(content: string): void {
-    if (!this.view) return;
-    this.saved = this.view.state.toText(content);
+    const state = this.view?.state ?? this.parked;
+    if (!state) return;
+    this.saved = state.toText(content);
     this.updateDirty();
   }
 
   /** Replace the document with fresh on-disk content (Reload); clears dirty and undo history. */
   reload(content: string): void {
     this.content = content;
-    if (!this.view) return;
-    this.view.setState(this.makeState(content));
-    this.saved = this.view.state.doc;
+    if (this.closed) return;
+    const state = this.makeState(content);
+    if (this.view) this.view.setState(state);
+    else if (this.parked) this.parked = state;
+    else return; // not created yet: firstUpdated uses `content`
+    this.saved = state.doc;
     this.updateDirty();
   }
 
@@ -131,8 +163,9 @@ export class ChronosCodeEditor extends LitElement {
   }
 
   private updateDirty(): void {
-    if (!this.view || !this.saved) return;
-    const doc = this.view.state.doc;
+    const state = this.view?.state ?? this.parked;
+    if (!state || !this.saved) return;
+    const doc = state.doc;
     const dirty = doc.length !== this.saved.length || !doc.eq(this.saved);
     if (dirty === this.dirty) return;
     this.dirty = dirty;

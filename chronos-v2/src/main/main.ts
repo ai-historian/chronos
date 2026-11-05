@@ -37,6 +37,22 @@ let currentWorkspace: string | undefined;
 let mainWindow: BrowserWindow | undefined;
 let welcomeWindow: BrowserWindow | undefined;
 let quitting = false;
+/**
+ * What happens once the main window has closed. Set when we initiate the close; the window's
+ * renderer may cancel it (beforeunload with unsaved editor tabs) and later re-request it with
+ * window/close, so the intent is kept until the window is actually gone.
+ */
+type AfterClose = { kind: "welcome" } | { kind: "open"; path: string } | { kind: "quit" };
+let mainAfterClose: AfterClose = { kind: "welcome" };
+/** The next main-window `close` event is one we started (keep mainAfterClose). */
+let mainOwnClose = false;
+
+function closeMainWindow(after: AfterClose): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainAfterClose = after;
+  mainOwnClose = true;
+  mainWindow.close();
+}
 let recent: RecentStore;
 let themePref: "system" | ThemeName = "system";
 // Live main-window host and its last reported state, for the application menu.
@@ -110,12 +126,16 @@ function openMainWindow(workspaceDir: string, replace = false): void {
     old.focus();
     return;
   }
+  if (old) {
+    // Swapping workspaces: close the old window first (it may refuse: unsaved edits → its renderer
+    // asks the user); the new one opens from the old one's `closed` event.
+    closeMainWindow({ kind: "open", path: workspaceDir });
+    return;
+  }
   currentWorkspace = workspaceDir;
   recent.add(workspaceDir);
   const win = createMainWindow(workspaceDir);
   mainWindow = win;
-  // Swapping workspaces: the new window exists first, so the old one's close never reaches welcome/quit.
-  old?.close();
   // Close welcome only after the main window exists so window-all-closed never fires.
   if (welcomeWindow && !welcomeWindow.isDestroyed()) welcomeWindow.close();
 }
@@ -141,6 +161,12 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
   });
   const onMsg = (e: Electron.IpcMainEvent, msg: WebviewToExt) => {
     if (e.sender !== win.webContents) return;
+    if (msg.type === "window/close") {
+      // The renderer resolved its unsaved edits; beforeunload now passes. Keep the pending intent.
+      mainOwnClose = true;
+      win.close();
+      return;
+    }
     // File-tree / file messages first; everything else is the agent host's.
     if (tree.handle(msg)) return;
     void host?.handleWebviewMessage(msg);
@@ -206,7 +232,19 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
     void promptRecoverIncompleteImports(win, h, workspaceDir);
   });
 
+  win.on("close", () => {
+    if (mainWindow !== win) return;
+    // A close we did not start (title-bar ✕) means "back to welcome", unless the app is quitting.
+    if (!mainOwnClose && !quitting) mainAfterClose = { kind: "welcome" };
+    mainOwnClose = false;
+  });
+  // The renderer's beforeunload cancelled the close (unsaved edits): a quit in progress is aborted.
+  win.webContents.on("will-prevent-unload", () => {
+    quitting = false;
+  });
   win.on("closed", () => {
+    const after: AfterClose = mainWindow === win ? mainAfterClose : { kind: "welcome" };
+    if (mainWindow === win) mainAfterClose = { kind: "welcome" };
     nativeTheme.off("updated", theme);
     ipcMain.off("chronos:msg", onMsg);
     cancelAnthropicOauth();
@@ -219,7 +257,10 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
       currentWorkspace = undefined;
     }
     rebuildMenu();
-    if (!quitting && !mainWindow) createWelcomeWindow();
+    if (quitting || mainWindow) return;
+    if (after.kind === "open") openMainWindow(after.path);
+    else if (after.kind === "welcome") createWelcomeWindow();
+    // "quit": no window left, so window-all-closed quits (resuming a quit the renderer paused).
   });
   // Dev aid: CHRONOS_DEV_PROTOCOL_CHECK=1 loads an in-workspace PNG (expect loaded) and an outside file (expect blocked, i.e. 403) via <img>, since the renderer CSP forbids fetch().
   if (process.env.CHRONOS_DEV_PROTOCOL_CHECK === "1") {
@@ -409,7 +450,7 @@ async function promptRecoverIncompleteImports(win: BrowserWindow, host: AgentHos
 }
 
 function closeWorkspace(): void {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close(); // returns to the welcome window
+  closeMainWindow({ kind: "welcome" });
 }
 
 async function newWorkspaceFromMenu(): Promise<void> {
@@ -517,5 +558,7 @@ app.whenReady().then(() => {
 });
 app.on("before-quit", () => {
   quitting = true;
+  // If the main window's renderer pauses the quit for unsaved edits, finish it after window/close.
+  if (mainWindow && !mainWindow.isDestroyed()) mainAfterClose = { kind: "quit" };
 });
 app.on("window-all-closed", () => app.quit());

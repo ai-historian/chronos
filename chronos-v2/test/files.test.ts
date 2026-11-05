@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync, readdirSync, statSync, utimesSync, truncateSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listDir, DirWatcher, readText, writeText, statMtime } from "../src/main/files";
+import { listDir, DirWatcher, readText, writeText, statMtime, isUtf8File } from "../src/main/files";
 
 function tmp(): string {
   return realpathSync(mkdtempSync(join(tmpdir(), "chronos-files-")));
@@ -121,4 +121,18 @@ test("writeText with stale expectedMtime returns changed-on-disk", () => {
   const r = writeText(f, "mine", mtimeMs);
   assert.deepEqual(r, { ok: false, error: "changed-on-disk" });
   assert.equal(readFileSync(f, "utf8"), "agent");
+});
+
+test("readText flags non-UTF-8 files instead of mangling them", () => {
+  const root = tmp();
+  const f = join(root, "latin1.csv");
+  writeFileSync(f, Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a])); // "café\n" in Latin-1
+  const r = readText(f);
+  assert.equal(r.encoding, "unknown");
+  assert.equal(r.content, "caf\u00e9\n");
+  assert.equal(isUtf8File(f), false);
+  const u = join(root, "utf8.csv");
+  writeFileSync(u, "\ufeffcaf\u00e9\n"); // BOM is kept so a save round-trips it
+  assert.deepEqual({ ...readText(u), mtimeMs: 0 }, { content: "\ufeffcaf\u00e9\n", mtimeMs: 0, encoding: "utf-8" });
+  assert.equal(isUtf8File(u), true);
 });

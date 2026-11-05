@@ -140,6 +140,7 @@ test("file/open of a .csv posts file/content text", () => {
   assert.deepEqual(calls, []);
   const last = posted.at(-1)!;
   assert.deepEqual(last, { type: "file/content", path: csv, content: "a\n", mtimeMs: statSync(csv).mtimeMs, readOnly: false, kind: "text" });
+  assert.ok(!posted.some((m) => m.type === "notify"));
   // other text types, including SKILL.md and upper-case extensions
   mkdirSync(join(root, "skills", "s"), { recursive: true });
   mkdirSync(join(root, "memory"));
@@ -228,4 +229,20 @@ test("file/save outside the workspace or into dot-dirs is refused", () => {
   const replies = posted.slice(n);
   assert.equal(replies.length, 4);
   assert.ok(replies.every((m) => m.type === "file/saved" && !m.ok));
+});
+
+test("a Latin-1 CSV opens read-only with a warning and cannot be saved", () => {
+  const { root, posted, host } = setup();
+  const f = join(root, "data", "latin1.csv");
+  const bytes = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+  writeFileSync(f, bytes);
+  chmodSync(f, 0o644);
+  host.handle({ type: "file/open", path: f });
+  const content = posted.find((m) => m.type === "file/content");
+  assert.ok(content && content.type === "file/content" && content.readOnly === true && content.kind === "text");
+  assert.ok(posted.some((m) => m.type === "notify" && m.level === "warning" && m.message === "Opened read-only: file is not UTF-8"));
+  host.handle({ type: "file/save", path: f, content: "caf\ufffd\n", expectedMtimeMs: -1 });
+  const saved = posted.at(-1)!;
+  assert.ok(saved.type === "file/saved" && !saved.ok);
+  assert.deepEqual(readFileSync(f), bytes);
 });

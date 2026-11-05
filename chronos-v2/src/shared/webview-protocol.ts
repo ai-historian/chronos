@@ -137,6 +137,8 @@ export type WebviewToExt =
   | { type: "file/copyPath"; path: string }
   // save an editor tab; expectedMtimeMs -1 = overwrite without the on-disk change check
   | { type: "file/save"; path: string; content: string; expectedMtimeMs: number }
+  // the user resolved unsaved edits (Save all / Don't save): close the window; beforeunload now passes
+  | { type: "window/close" }
   | { type: "uiResponse"; response: RpcExtensionUIResponse }
   | { type: "permissionResponse"; id: string; action: "allow" | "always" | "deny"; prefix?: string }
   // edit a past user message: fork the session to just before it, then send

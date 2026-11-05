@@ -96,12 +96,42 @@ export function statMtime(path: string): number {
   return statSync(path).mtimeMs;
 }
 
-/** Read a file as utf-8 for the editor; throws for files over 20 MB. */
-export function readText(path: string): { content: string; mtimeMs: number } {
+/** Strict UTF-8 (BOM kept in the text so a save writes it back). Throws on invalid bytes. */
+function decodeUtf8(buf: Buffer): string {
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buf);
+}
+
+/**
+ * Read a file for the editor; throws for files over 20 MB. Non-UTF-8 files (e.g. Windows-1252
+ * CSVs) come back decoded as Latin-1 with `encoding: "unknown"` — callers must not save them,
+ * since writing the text back as UTF-8 would change every non-ASCII byte.
+ */
+export function readText(path: string): { content: string; mtimeMs: number; encoding: "utf-8" | "unknown" } {
   const st = statSync(path);
   if (!st.isFile()) throw new Error(`${basename(path)} is not a file`);
   if (st.size > MAX_TEXT_BYTES) throw new Error(`${basename(path)} is larger than 20 MB; open it in another app`);
-  return { content: readFileSync(path, "utf8"), mtimeMs: st.mtimeMs };
+  const buf = readFileSync(path);
+  try {
+    return { content: decodeUtf8(buf), mtimeMs: st.mtimeMs, encoding: "utf-8" };
+  } catch {
+    return { content: buf.toString("latin1"), mtimeMs: st.mtimeMs, encoding: "unknown" };
+  }
+}
+
+/** True if the file is valid UTF-8 (or does not exist); false for other encodings or unreadable files. */
+export function isUtf8File(path: string): boolean {
+  let buf: Buffer;
+  try {
+    buf = readFileSync(path);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT";
+  }
+  try {
+    decodeUtf8(buf);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export type WriteResult = { ok: true; mtimeMs: number } | { ok: false; error: "changed-on-disk" | string };
