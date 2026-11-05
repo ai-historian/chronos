@@ -1,8 +1,8 @@
 // Main-side handling of the workspace file tree: listings, watching expanded dirs, and file actions.
-import { realpathSync, statSync } from "node:fs";
+import { accessSync, constants as fsConstants, realpathSync, statSync } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isAllowedPath } from "./protocol-handler";
-import { DirWatcher, listDir, type DirChange, type TreeEntry } from "./files";
+import { DirWatcher, listDir, readText, writeText, type DirChange, type TreeEntry } from "./files";
 import type { Transport } from "./transport";
 import type { WebviewToExt } from "../shared/webview-protocol";
 
@@ -17,11 +17,18 @@ export interface TreeHostOptions {
   transport: Transport;
   /** Open a source page in the viewer (AgentHost.showPageById). */
   showPage?: (sourceName: string, pageId: number) => void;
+  /** Absolute image path → URL the renderer can load (toChronosFileUrl). Without it images go to the OS. */
+  imageUri?: (absPath: string) => string;
   /** OS integration; defaults to Electron's shell/clipboard (required lazily). */
   os?: TreeHostOs;
 }
 
 const PAGE_FILE = /^page_(\d+)\.(png|jpe?g)$/i;
+
+/** Opened in an editor tab (SKILL.md etc. are covered by md). */
+export const TEXT_EXTENSIONS: readonly string[] = ["csv", "json", "md", "markdown", "yaml", "yml", "txt", "skill", "log", "tsv"];
+/** Opened in an image tab (unless inside a source's png/ dir). */
+export const IMAGE_EXTENSIONS: readonly string[] = ["png", "jpg", "jpeg", "gif", "webp"];
 
 /** Extensions shell.openPath would execute rather than open in a viewer app (any platform). */
 export const LAUNCHABLE_EXTENSIONS: readonly string[] = [
@@ -120,7 +127,23 @@ export class TreeHost {
         return true;
       case "file/open": {
         const p = this.validate(msg.path);
-        if (p) this.openFile(p.real);
+        if (p) this.openFile(p);
+        return true;
+      }
+      case "file/save": {
+        const p = this.validate(msg.path);
+        // Always answer, so a renderer waiting to close a tab after saving is not left hanging.
+        if (!p || typeof msg.content !== "string" || !this.isTextFile(p.real)) {
+          this.opts.transport.post({ type: "file/saved", path: msg.path, ok: false, error: "This file cannot be saved here" });
+          return true;
+        }
+        const expected = typeof msg.expectedMtimeMs === "number" ? msg.expectedMtimeMs : undefined;
+        const r = writeText(p.real, msg.content, expected);
+        this.opts.transport.post(
+          r.ok
+            ? { type: "file/saved", path: msg.path, ok: true, mtimeMs: r.mtimeMs }
+            : { type: "file/saved", path: msg.path, ok: false, error: r.error },
+        );
         return true;
       }
       case "file/revealInOs": {
@@ -176,11 +199,16 @@ export class TreeHost {
     }
   }
 
-  private openFile(p: string): void {
+  private isTextFile(p: string): boolean {
+    return TEXT_EXTENSIONS.includes(extname(p).slice(1).toLowerCase());
+  }
+
+  private openFile({ real: p, logical }: Checked): void {
     const segs = relative(this.realRoot, p).split(sep);
     const m = PAGE_FILE.exec(segs[segs.length - 1] ?? "");
+    const inSourcePng = segs.length >= 4 && segs[0] === "sources" && segs[segs.length - 2] === "png";
     // <root>/sources/<source...>/png/page_NNNN.png → viewer
-    if (m && segs.length >= 4 && segs[0] === "sources" && segs[segs.length - 2] === "png" && this.opts.showPage) {
+    if (m && inSourcePng && this.opts.showPage) {
       this.opts.showPage(segs.slice(1, -2).join("/"), parseInt(m[1], 10));
       return;
     }
@@ -190,7 +218,37 @@ export class TreeHost {
       this.opts.transport.post({ type: "notify", level: "info", message: "Executable files are revealed, not launched" });
       return;
     }
+    const ext = extname(p).slice(1).toLowerCase();
+    // Replies carry the logical (requested) path: it keys the renderer's tab.
+    if (this.isTextFile(p)) {
+      try {
+        const { content, mtimeMs } = readText(p);
+        this.opts.transport.post({ type: "file/content", path: logical, content, mtimeMs, readOnly: !this.writable(p), kind: "text" });
+      } catch (e) {
+        this.opts.transport.post({ type: "notify", level: "error", message: `Could not open file: ${(e as Error).message}` });
+      }
+      return;
+    }
+    if (IMAGE_EXTENSIONS.includes(ext) && !inSourcePng && this.opts.imageUri) {
+      let mtimeMs = 0;
+      try {
+        mtimeMs = statSync(p).mtimeMs;
+      } catch {
+        // vanished; the image tab just shows a broken image
+      }
+      this.opts.transport.post({ type: "file/content", path: logical, content: this.opts.imageUri(p), mtimeMs, readOnly: true, kind: "image" });
+      return;
+    }
     this.osApi().openPath(p);
+  }
+
+  private writable(p: string): boolean {
+    try {
+      accessSync(p, fsConstants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private postRoot(): void {

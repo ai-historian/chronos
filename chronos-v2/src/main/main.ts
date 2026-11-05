@@ -137,6 +137,7 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
     root: workspaceDir,
     transport,
     showPage: (sourceName, pageId) => host?.showPageById(sourceName, pageId),
+    imageUri: toChronosFileUrl,
   });
   const onMsg = (e: Electron.IpcMainEvent, msg: WebviewToExt) => {
     if (e.sender !== win.webContents) return;

@@ -99,6 +99,10 @@ export type ExtToWebview =
   | { type: "tree"; root: string; entries: TreeEntry[] }
   | { type: "tree/children"; path: string; entries: TreeEntry[] }
   | { type: "tree/changed"; path: string; kind: "add" | "unlink" | "change"; entry?: TreeEntry }
+  // a file opened into a center tab (reply to file/open); for kind "image", content is a chronos-file:// URL
+  | { type: "file/content"; path: string; content: string; mtimeMs: number; readOnly: boolean; kind: "text" | "image" }
+  // reply to file/save; error "changed-on-disk" = the file's mtime no longer matches expectedMtimeMs
+  | { type: "file/saved"; path: string; ok: boolean; mtimeMs?: number; error?: string }
   // test-only seam (integration tests): simulate a user action / request a state snapshot
   | { type: "__test/invoke"; action: string; arg?: string }
   | { type: "__test/dump" };
@@ -131,6 +135,8 @@ export type WebviewToExt =
   | { type: "file/open"; path: string }
   | { type: "file/revealInOs"; path: string }
   | { type: "file/copyPath"; path: string }
+  // save an editor tab; expectedMtimeMs -1 = overwrite without the on-disk change check
+  | { type: "file/save"; path: string; content: string; expectedMtimeMs: number }
   | { type: "uiResponse"; response: RpcExtensionUIResponse }
   | { type: "permissionResponse"; id: string; action: "allow" | "always" | "deny"; prefix?: string }
   // edit a past user message: fork the session to just before it, then send

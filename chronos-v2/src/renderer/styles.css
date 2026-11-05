@@ -3056,3 +3056,182 @@ chronos-file-tree {
   margin: 4px 2px;
   background: var(--ch-border-soft);
 }
+
+/* ── center tabs (Page / Data + editor and image tabs) ───────────────────── */
+
+chronos-center-tabs {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+chronos-center-tabs > .pv-tabs {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+chronos-center-tabs .pv-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  cursor: pointer;
+  user-select: none;
+}
+
+chronos-center-tabs .pv-tab:focus-visible {
+  outline: 1px solid var(--ch-brand);
+  outline-offset: -1px;
+}
+
+chronos-center-tabs .pv-tab.is-closable {
+  padding-right: 4px;
+}
+
+.pv-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-tab-close {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--ch-radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ch-muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.pv-tab-close:hover {
+  background: var(--ch-surface-2);
+  color: var(--ch-fg);
+}
+
+.pv-tab-x {
+  visibility: hidden;
+}
+
+.pv-tab:hover .pv-tab-x,
+.pv-tab.is-active .pv-tab-x {
+  visibility: visible;
+}
+
+/* Unsaved: a dot in place of the ✕ (the ✕ returns on hover). */
+.pv-tab-dirty {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  display: none;
+}
+
+.pv-tab.is-dirty .pv-tab-dirty {
+  display: block;
+}
+
+.pv-tab.is-dirty .pv-tab-x {
+  visibility: hidden;
+}
+
+.pv-tab.is-dirty .pv-tab-close:hover .pv-tab-dirty {
+  display: none;
+}
+
+.pv-tab.is-dirty .pv-tab-close:hover .pv-tab-x {
+  visibility: visible;
+}
+
+.ct-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.ct-panel[hidden] {
+  display: none;
+}
+
+.ct-panel > * {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* editor */
+
+chronos-code-editor,
+.ce-root {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.ce-root .cm-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  font-size: 13px;
+  background: var(--vscode-editor-background, var(--ch-bg));
+}
+
+.ce-root .cm-editor.cm-focused {
+  outline: none;
+}
+
+.ce-root .cm-scroller {
+  font-family: var(--ch-mono);
+  line-height: 1.5;
+}
+
+.ce-root .cm-gutters {
+  background: var(--ch-surface-1);
+  border-right: 1px solid var(--ch-border-soft);
+  color: var(--ch-muted);
+}
+
+/* image tab */
+
+chronos-image-tab,
+.it-root {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.it-toolbar {
+  justify-content: flex-end;
+}
+
+.it-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  text-align: center;
+}
+
+.it-img {
+  max-width: 100%;
+  height: auto;
+  box-shadow: var(--ch-shadow-1, 0 1px 3px rgba(0, 0, 0, 0.2));
+}
+
+/* save / close confirmation */
+
+.file-modal-text {
+  margin-bottom: 14px;
+  line-height: 1.5;
+  color: var(--ch-muted);
+}

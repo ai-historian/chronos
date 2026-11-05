@@ -18,6 +18,10 @@ import "./file-tree";
 import "./page-viewer";
 import "./data-viewer";
 import "./provider-dialog";
+import "./center-tabs";
+import "./code-editor";
+import type { ChronosCodeEditor } from "./code-editor";
+import { TabsModel, type Tab } from "../tabs-model";
 import type { ProviderOption, OauthStatusView } from "./provider-dialog";
 import brandIcon from "../assets/chronos-icon.png";
 
@@ -28,6 +32,18 @@ interface ProgressEntry {
   total?: number;
   message?: string;
   finished?: boolean;
+}
+
+/** A pending center-tab decision: a dirty tab being closed, or a save refused because the file changed on disk. */
+interface FileModal {
+  kind: "close" | "conflict";
+  id: string;
+}
+
+/** Persisted editor/image tabs (restored by re-opening each path). */
+interface SavedTab {
+  kind: "editor" | "image";
+  path: string;
 }
 
 interface Toast {
@@ -50,7 +66,8 @@ export class ChronosApp extends LitElement {
     yolo: { state: true },
     contextTokens: { state: true },
     sessionLoading: { state: true },
-    viewerTab: { state: true },
+    tabsRev: { state: true },
+    fileModal: { state: true },
     loginRequired: { state: true },
     loginProviders: { state: true },
     oauthStatus: { state: true },
@@ -73,7 +90,9 @@ export class ChronosApp extends LitElement {
   declare yolo: boolean;
   declare contextTokens: number;
   declare sessionLoading: { title?: string; name: string; sizeBytes?: number } | null;
-  declare viewerTab: "page" | "data";
+  /** Bumped whenever `tabs` (a mutable model) changes, to re-render. */
+  declare tabsRev: number;
+  declare fileModal: FileModal | null;
   declare loginRequired: boolean;
   /** Non-null while the provider dialog is open. */
   declare loginProviders: ProviderOption[] | null;
@@ -99,6 +118,18 @@ export class ChronosApp extends LitElement {
   }
 
   private toastSeq = 0;
+  readonly tabs = new TabsModel();
+  /** Initial content for editor tabs (the editor owns the live document). */
+  private tabContent = new Map<string, { content: string; readOnly: boolean }>();
+  /** Paths whose next file/content must replace the editor's text (Reload). */
+  private pendingReload = new Set<string>();
+  /** Paths to close once their in-flight save succeeds. */
+  private pendingClose = new Set<string>();
+  /** Content sent with the in-flight save, per path (becomes the saved baseline on success). */
+  private savingContent = new Map<string, string>();
+  /** Persisted tabs still being re-opened, and the tab to re-activate once it is back. */
+  private restoringPaths = new Map<string, SavedTab["kind"]>();
+  private restoredActive: string | null = null;
   /** Expanded tree dirs from saved UI state, applied once the tree element exists. */
   private restoredExpanded: string[] = [];
 
@@ -116,7 +147,8 @@ export class ChronosApp extends LitElement {
     this.yolo = false;
     this.contextTokens = 0;
     this.sessionLoading = null;
-    this.viewerTab = "page";
+    this.tabsRev = 0;
+    this.fileModal = null;
     this.loginRequired = false;
     this.loginProviders = null;
     this.oauthStatus = null;
@@ -145,21 +177,49 @@ export class ChronosApp extends LitElement {
   }
 
   restoreUiState(
-    saved: { splitPct?: number; treeWidth?: number; treeHidden?: boolean; expanded?: string[] } | undefined,
+    saved:
+      | { splitPct?: number; treeWidth?: number; treeHidden?: boolean; expanded?: string[]; tabs?: SavedTab[]; activeTab?: string }
+      | undefined,
   ): void {
     if (saved?.splitPct) this.splitPct = saved.splitPct;
     if (typeof saved?.treeWidth === "number") this.treeWidth = ChronosApp.clampTree(saved.treeWidth);
     if (typeof saved?.treeHidden === "boolean") this.treeHidden = saved.treeHidden;
     if (Array.isArray(saved?.expanded)) this.restoredExpanded = saved.expanded.filter((p) => typeof p === "string");
+    if (Array.isArray(saved?.tabs)) {
+      for (const t of saved.tabs) {
+        if (t && typeof t.path === "string" && (t.kind === "editor" || t.kind === "image")) this.restoringPaths.set(t.path, t.kind);
+      }
+    }
+    if (saved?.activeTab === "data") this.tabs.activate("data");
+    else if (typeof saved?.activeTab === "string" && this.restoringPaths.has(saved.activeTab)) this.restoredActive = saved.activeTab;
   }
 
-  getUiState(): { splitPct: number; treeWidth: number; treeHidden: boolean; expanded: string[] } {
+  getUiState(): {
+    splitPct: number;
+    treeWidth: number;
+    treeHidden: boolean;
+    expanded: string[];
+    tabs: SavedTab[];
+    activeTab: string;
+  } {
+    const open: SavedTab[] = this.tabs.tabs.flatMap((t) =>
+      (t.kind === "editor" || t.kind === "image") && t.path ? [{ kind: t.kind, path: t.path }] : [],
+    );
+    // Tabs not yet back from a restore are still part of the saved layout.
+    for (const [path, kind] of this.restoringPaths) if (!open.some((t) => t.path === path)) open.push({ kind, path });
     return {
       splitPct: this.splitPct,
       treeWidth: this.treeWidth,
       treeHidden: this.treeHidden,
       expanded: this.tree?.expandedPaths() ?? this.restoredExpanded,
+      tabs: open,
+      activeTab: this.restoredActive ?? this.tabs.activeId,
     };
+  }
+
+  /** For the integration test seam / older callers: the active tab's id ("page", "data" or a path). */
+  get viewerTab(): string {
+    return this.tabs.activeId;
   }
 
   private static clampTree(px: number): number {
@@ -221,7 +281,7 @@ export class ChronosApp extends LitElement {
         this.currentSource = "";
         this.viewer?.clearSource();
         this.dataViewer?.clearSource();
-        this.viewerTab = "page";
+        this.activateTab("page");
         break;
       case "commands":
         this.chat?.setCommands(msg.commands);
@@ -319,11 +379,11 @@ export class ChronosApp extends LitElement {
         this.currentSource = msg.sourceName;
         // An explicit page (agent or a data-row "view source" click) brings the
         // Page tab forward so the cited region is visible.
-        this.viewerTab = "page";
+        this.activateTab("page");
         this.viewer?.showPage(msg.imageUri, msg.pageId, msg.sourceName, msg.firstPage, msg.lastPage, msg.bbox);
         break;
       case "viewer/showText":
-        this.viewerTab = "page";
+        this.activateTab("page");
         this.viewer?.showText(
           { filePath: msg.filePath, content: msg.content, highlight: msg.highlight },
           msg.sourceName,
@@ -340,6 +400,12 @@ export class ChronosApp extends LitElement {
         break;
       case "data/sourcePreview":
         this.dataViewer?.showSourcePreview(msg.imageUri, msg.pageId, msg.bbox, msg.sourceName);
+        break;
+      case "file/content":
+        this.onFileContent(msg);
+        break;
+      case "file/saved":
+        this.onFileSaved(msg);
         break;
       case "__test/invoke":
         this.runTestAction(msg.action, msg.arg);
@@ -358,11 +424,10 @@ export class ChronosApp extends LitElement {
         this.chat?.testSubmit(arg ?? "");
         break;
       case "openDataTab":
-        this.viewerTab = "data";
-        this.postMessage({ type: "data/listRequest" });
+        this.activateTab("data");
         break;
       case "openPageTab":
-        this.viewerTab = "page";
+        this.activateTab("page");
         break;
       case "newSession":
         this.postMessage({ type: "newSession" });
@@ -389,6 +454,7 @@ export class ChronosApp extends LitElement {
     return {
       currentSource: this.currentSource,
       viewerTab: this.viewerTab,
+      tabs: this.tabs.tabs.map((t) => ({ id: t.id, kind: t.kind, dirty: t.dirty })),
       chat: this.chat?.testSnapshot() ?? null,
       viewer: this.viewer?.testSnapshot() ?? null,
       data: this.dataViewer?.testSnapshot() ?? null,
@@ -410,6 +476,221 @@ export class ChronosApp extends LitElement {
       response: { type: "extension_ui_response", id: this.uiRequest.id, ...response } as any,
     });
     this.uiRequest = this.uiRequestQueue.shift() ?? null;
+  }
+
+  // ── center tabs ───────────────────────────────────────────────────────────
+
+  private tabsChanged(): void {
+    this.tabsRev++;
+    this.dispatchEvent(new CustomEvent("ui-state-changed", { bubbles: true }));
+  }
+
+  private activateTab(id: string): void {
+    const changed = this.tabs.activeId !== id;
+    this.tabs.activate(id);
+    // Selecting Data (even when already selected) refreshes its file list, as before.
+    if (this.tabs.activeId === "data") this.postMessage({ type: "data/listRequest" });
+    if (changed) this.tabsChanged();
+  }
+
+  private editorFor(path: string): ChronosCodeEditor | undefined {
+    return [...this.querySelectorAll("chronos-code-editor")].find((e) => e.path === path);
+  }
+
+  private static basename(path: string): string {
+    return path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1) || path;
+  }
+
+  private onFileContent(msg: Extract<ExtToWebview, { type: "file/content" }>): void {
+    const restoring = this.restoringPaths.delete(msg.path);
+    const prevActive = this.tabs.activeId;
+    const existing = this.tabs.tabs.find((t) => t.path === msg.path);
+    if (existing && existing.kind === "editor" && msg.kind === "text") {
+      // Re-opening an open file only replaces its text when asked to (Reload) or when there
+      // are no unsaved edits to lose.
+      if (this.pendingReload.delete(msg.path) || !existing.dirty) {
+        this.tabContent.set(msg.path, { content: msg.content, readOnly: msg.readOnly });
+        this.editorFor(msg.path)?.reload(msg.content);
+        this.tabs.setMtime(existing.id, msg.mtimeMs);
+        this.tabs.markDirty(existing.id, false);
+      }
+      this.tabs.activate(existing.id);
+    } else if (existing) {
+      if (msg.kind === "image") this.tabContent.set(msg.path, { content: msg.content, readOnly: true });
+      this.tabs.activate(existing.id);
+    } else {
+      this.tabContent.set(msg.path, { content: msg.content, readOnly: msg.readOnly });
+      this.tabs.open({
+        kind: msg.kind === "image" ? "image" : "editor",
+        path: msg.path,
+        title: ChronosApp.basename(msg.path),
+        mtimeMs: msg.mtimeMs,
+      });
+    }
+    if (restoring) {
+      // Restoring the saved layout must not steal focus; bring back the saved active tab instead.
+      this.tabs.activate(prevActive);
+      if (this.restoredActive === msg.path) {
+        this.tabs.activate(msg.path);
+        this.restoredActive = null;
+      }
+    }
+    this.tabsChanged();
+    if (!restoring && msg.kind === "text") void this.updateComplete.then(() => this.editorFor(msg.path)?.focusEditor());
+  }
+
+  private saveTab(tab: Tab, force = false): void {
+    if (tab.kind !== "editor" || !tab.path) return;
+    const editor = this.editorFor(tab.path);
+    if (!editor || this.tabContent.get(tab.path)?.readOnly) return;
+    const content = editor.getContent();
+    this.savingContent.set(tab.path, content);
+    this.postMessage({ type: "file/save", path: tab.path, content, expectedMtimeMs: force ? -1 : tab.mtimeMs ?? -1 });
+  }
+
+  private onFileSaved(msg: Extract<ExtToWebview, { type: "file/saved" }>): void {
+    const tab = this.tabs.tabs.find((t) => t.path === msg.path);
+    const content = this.savingContent.get(msg.path);
+    this.savingContent.delete(msg.path);
+    if (!tab) return;
+    if (msg.ok) {
+      if (typeof msg.mtimeMs === "number") this.tabs.setMtime(tab.id, msg.mtimeMs);
+      const editor = this.editorFor(msg.path);
+      if (content !== undefined) {
+        this.tabContent.set(msg.path, { content, readOnly: false });
+        editor?.setSavedContent(content); // emits dirty-changed if typing continued meanwhile
+      }
+      // Typing during the round trip leaves the tab dirty against the new baseline.
+      if (!editor || content === undefined || editor.getContent() === content) this.tabs.markDirty(tab.id, false);
+      if (this.pendingClose.delete(msg.path)) this.tabs.forceClose(tab.id);
+      this.tabsChanged();
+      return;
+    }
+    if (msg.error === "changed-on-disk") {
+      // A pending close survives into the conflict modal: Overwrite still closes afterwards.
+      this.tabs.activate(tab.id);
+      this.fileModal = { kind: "conflict", id: tab.id };
+      this.tabsChanged();
+    } else {
+      this.pendingClose.delete(msg.path);
+      this.pushToast("error", `Could not save ${tab.title}: ${msg.error ?? "unknown error"}`);
+    }
+  }
+
+  private requestClose(id: string): void {
+    const r = this.tabs.close(id);
+    if (r === "needs-confirm") {
+      this.tabs.activate(id);
+      this.fileModal = { kind: "close", id };
+    } else if (r === "closed" && !this.tabs.tabs.some((t) => t.path === id)) {
+      this.tabContent.delete(id);
+    }
+    this.tabsChanged();
+  }
+
+  private resolveFileModal(choice: "save" | "discard" | "overwrite" | "reload" | "cancel"): void {
+    const modal = this.fileModal;
+    this.fileModal = null;
+    const tab = modal ? this.tabs.get(modal.id) : undefined;
+    if (!modal || !tab?.path) return;
+    switch (choice) {
+      case "save":
+        this.pendingClose.add(tab.path);
+        this.saveTab(tab);
+        break;
+      case "discard":
+        this.tabs.forceClose(tab.id);
+        this.tabContent.delete(tab.path);
+        this.tabsChanged();
+        break;
+      case "overwrite":
+        this.saveTab(tab, true);
+        break;
+      case "reload":
+        this.pendingClose.delete(tab.path);
+        this.pendingReload.add(tab.path);
+        this.postMessage({ type: "file/open", path: tab.path });
+        break;
+      case "cancel":
+        this.pendingClose.delete(tab.path);
+        break;
+    }
+  }
+
+  private renderFileModal(): TemplateResult {
+    const modal = this.fileModal!;
+    const tab = this.tabs.get(modal.id);
+    const name = tab?.title ?? "";
+    const conflict = modal.kind === "conflict";
+    return html`
+      <div class="dialog-backdrop"></div>
+      <div class="dialog file-modal" role="alertdialog" aria-modal="true"
+        @keydown=${(e: KeyboardEvent) => { if (e.key === "Escape") this.resolveFileModal("cancel"); }}>
+        <div class="dialog-title">${conflict ? `${name} changed on disk` : `Save changes to ${name}?`}</div>
+        <div class="file-modal-text">
+          ${conflict
+            ? "The file was modified (perhaps by the agent) after you opened it. Overwrite it with your version, or reload the version on disk and discard your edits?"
+            : "Your changes will be lost if you don't save them."}
+        </div>
+        <div class="dialog-actions">
+          <button class="btn-secondary" @click=${() => this.resolveFileModal("cancel")}>Cancel</button>
+          ${conflict
+            ? html`<button class="btn-secondary" @click=${() => this.resolveFileModal("reload")}>Reload</button>
+                <button class="btn-send" @click=${() => this.resolveFileModal("overwrite")}>Overwrite</button>`
+            : html`<button class="btn-secondary" @click=${() => this.resolveFileModal("discard")}>Don't save</button>
+                <button class="btn-send" @click=${() => this.resolveFileModal("save")}>Save</button>`}
+        </div>
+      </div>
+    `;
+  }
+
+  private renderTabContent(tab: Tab): unknown {
+    switch (tab.kind) {
+      case "page":
+        return html`<chronos-page-viewer></chronos-page-viewer>`;
+      case "data":
+        return html`<chronos-data-viewer></chronos-data-viewer>`;
+      case "image":
+        return html`<chronos-image-tab .src=${this.tabContent.get(tab.path!)?.content ?? ""}></chronos-image-tab>`;
+      case "editor": {
+        const c = this.tabContent.get(tab.path!);
+        return html`<chronos-code-editor
+          .path=${tab.path!}
+          .content=${c?.content ?? ""}
+          .readOnly=${c?.readOnly ?? false}
+          @dirty-changed=${(e: CustomEvent<{ dirty: boolean }>) => {
+            this.tabs.markDirty(tab.id, e.detail.dirty);
+            this.tabsRev++;
+          }}
+          @save-requested=${() => this.saveTab(tab)}
+        ></chronos-code-editor>`;
+      }
+    }
+  }
+
+  private readonly onGlobalKeydown = (e: KeyboardEvent): void => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "w") {
+      const active = this.tabs.active;
+      if (active.kind !== "editor" && active.kind !== "image") return;
+      if (this.fileModal || this.uiRequest) return;
+      e.preventDefault();
+      this.requestClose(active.id);
+    }
+  };
+
+  protected updated(changed: Map<string, unknown>): void {
+    // Focus the modal's primary action so Enter / Escape work without a click.
+    if (changed.has("fileModal") && this.fileModal) this.querySelector<HTMLButtonElement>(".file-modal .btn-send")?.focus();
+  }
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener("keydown", this.onGlobalKeydown);
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    window.removeEventListener("keydown", this.onGlobalKeydown);
   }
 
   // ── splitter ──────────────────────────────────────────────────────────────
@@ -496,7 +777,7 @@ export class ChronosApp extends LitElement {
 
   render(): TemplateResult {
     return html`
-      <div id="app-root" @keydown=${(e: KeyboardEvent) => { if (this.viewerTab === "page") this.viewer?.handleKeydown(e); }}>
+      <div id="app-root" @keydown=${(e: KeyboardEvent) => { if (this.tabs.activeId === "page") this.viewer?.handleKeydown(e); }}>
         ${this.renderHeader()}
         ${this.progress.size ? this.renderProgress() : nothing}
         ${this.loginRequired ? this.renderLoginBanner() : nothing}
@@ -507,17 +788,13 @@ export class ChronosApp extends LitElement {
           ${this.treeHidden ? nothing : html`<div id="splitter-tree" @pointerdown=${this.onTreeSplitterDown} title="Drag to resize"></div>`}
           <div id="app-panes">
           <div id="pane-viewer" style="flex-basis:${this.chatHidden ? 100 : this.splitPct}%">
-            <div class="pv-tabs">
-              <button class="pv-tab ${this.viewerTab === "page" ? "is-active" : ""}" @click=${() => (this.viewerTab = "page")}>Page</button>
-              <button class="pv-tab ${this.viewerTab === "data" ? "is-active" : ""}" @click=${() => {
-                this.viewerTab = "data";
-                this.postMessage({ type: "data/listRequest" });
-              }}>Data</button>
-            </div>
-            <div class="pv-tab-body">
-              <chronos-page-viewer ?hidden=${this.viewerTab !== "page"}></chronos-page-viewer>
-              <chronos-data-viewer ?hidden=${this.viewerTab !== "data"}></chronos-data-viewer>
-            </div>
+            <chronos-center-tabs
+              .tabs=${[...this.tabs.tabs]}
+              .activeId=${this.tabs.activeId}
+              .renderTab=${(t: Tab) => this.renderTabContent(t)}
+              @tab-activate=${(e: CustomEvent<{ id: string }>) => this.activateTab(e.detail.id)}
+              @tab-close=${(e: CustomEvent<{ id: string }>) => this.requestClose(e.detail.id)}
+            ></chronos-center-tabs>
           </div>
           ${this.chatHidden ? nothing : html`<div id="splitter" @pointerdown=${this.onSplitterDown} title="Drag to resize"></div>`}
           <div id="pane-chat" ?hidden=${this.chatHidden} style="flex-basis:${100 - this.splitPct}%">
@@ -527,6 +804,7 @@ export class ChronosApp extends LitElement {
         </div>
         ${this.drawerOpen ? this.renderDrawer() : nothing}
         ${this.uiRequest ? this.renderUiRequest() : nothing}
+        ${this.fileModal ? this.renderFileModal() : nothing}
         ${this.showPagePrompt ? this.renderShowPagePrompt() : nothing}
         ${this.loginProviders
           ? html`<chronos-provider-dialog
@@ -819,8 +1097,20 @@ export class ChronosApp extends LitElement {
 
   protected firstUpdated(): void {
     this.chat?.setPostMessage((msg) => this.postMessage(msg));
-    this.viewer?.setPostMessage((msg) => this.postMessage(msg));
-    this.dataViewer?.setPostMessage((msg) => this.postMessage(msg));
+    // The viewers live inside <chronos-center-tabs>, which renders in its own update.
+    void this.querySelector("chronos-center-tabs")?.updateComplete.then(() => {
+      this.viewer?.setPostMessage((msg) => this.postMessage(msg));
+      this.dataViewer?.setPostMessage((msg) => this.postMessage(msg));
+    });
+    if (this.tabs.activeId === "data") this.postMessage({ type: "data/listRequest" });
+    if (this.restoringPaths.size) {
+      for (const path of this.restoringPaths.keys()) this.postMessage({ type: "file/open", path });
+      // Paths main refused (deleted / moved meanwhile) never answer; stop persisting them.
+      setTimeout(() => {
+        this.restoringPaths.clear();
+        this.restoredActive = null;
+      }, 5000);
+    }
     const tree = this.tree;
     if (tree) {
       tree.setPostMessage((msg) => this.postMessage(msg));

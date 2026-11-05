@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, symlinkSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, symlinkSync, chmodSync, readFileSync, statSync, utimesSync, truncateSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TreeHost, LAUNCHABLE_EXTENSIONS, isLaunchable } from "../src/main/tree-host";
@@ -20,6 +20,7 @@ function setup() {
     root,
     transport: { post: (m) => posted.push(m) },
     showPage: (s, p) => calls.push(`page ${s} ${p}`),
+    imageUri: (p) => `img:${p}`,
     os: {
       openPath: (p) => calls.push(`open ${p}`),
       showItemInFolder: (p) => calls.push(`reveal ${p}`),
@@ -63,15 +64,17 @@ test("renderer paths outside the workspace or under dot-dirs are rejected silent
   }
 });
 
-test("file/open routes page PNGs to the viewer and everything else to the OS", () => {
+test("file/open routes page PNGs to the viewer and unknown types to the OS", () => {
   const { root, calls, host } = setup();
+  writeFileSync(join(root, "data", "notes.docx"), "x");
+  chmodSync(join(root, "data", "notes.docx"), 0o644);
   host.handle({ type: "file/open", path: join(root, "sources", "coll", "Demo", "png", "page_0007.png") });
-  host.handle({ type: "file/open", path: join(root, "data", "x.csv") });
+  host.handle({ type: "file/open", path: join(root, "data", "notes.docx") });
   host.handle({ type: "file/revealInOs", path: join(root, "data") });
   host.handle({ type: "file/copyPath", path: join(root, "data", "x.csv") });
   assert.deepEqual(calls, [
     "page coll/Demo 7",
-    `open ${join(root, "data", "x.csv")}`,
+    `open ${join(root, "data", "notes.docx")}`,
     `reveal ${join(root, "data")}`,
     `copy ${join(root, "data", "x.csv")}`,
   ]);
@@ -127,4 +130,102 @@ test("in-workspace symlinks resolve to the realpath for use", () => {
   symlinkSync(join(root, "data", "x.csv"), link);
   host.handle({ type: "file/copyPath", path: link });
   assert.deepEqual(calls, [`copy ${join(root, "data", "x.csv")}`]);
+});
+
+test("file/open of a .csv posts file/content text", () => {
+  const { root, posted, calls, host } = setup();
+  const csv = join(root, "data", "x.csv");
+  chmodSync(csv, 0o644);
+  host.handle({ type: "file/open", path: csv });
+  assert.deepEqual(calls, []);
+  const last = posted.at(-1)!;
+  assert.deepEqual(last, { type: "file/content", path: csv, content: "a\n", mtimeMs: statSync(csv).mtimeMs, readOnly: false, kind: "text" });
+  // other text types, including SKILL.md and upper-case extensions
+  mkdirSync(join(root, "skills", "s"), { recursive: true });
+  mkdirSync(join(root, "memory"));
+  for (const f of [join(root, "skills", "s", "SKILL.md"), join(root, "memory", "MEMORY.MD"), join(root, "data", "a.yaml"), join(root, "data", "b.json")]) {
+    writeFileSync(f, "x");
+    chmodSync(f, 0o644);
+    host.handle({ type: "file/open", path: f });
+    const m = posted.at(-1)!;
+    assert.ok(m.type === "file/content" && m.kind === "text" && m.path === f, f);
+  }
+});
+
+test("file/open of a .png under data/ posts file/content image", () => {
+  const { root, posted, calls, host } = setup();
+  const png = join(root, "data", "crop.png");
+  writeFileSync(png, "x");
+  chmodSync(png, 0o644);
+  host.handle({ type: "file/open", path: png });
+  assert.deepEqual(calls, []);
+  const last = posted.at(-1)!;
+  assert.equal(last.type, "file/content");
+  assert.ok(last.type === "file/content" && last.kind === "image" && last.readOnly === true && last.content === `img:${png}` && last.path === png);
+  // a non-page image inside a source's png/ dir is not an image tab
+  const thumb = join(root, "sources", "coll", "Demo", "png", "thumb.png");
+  writeFileSync(thumb, "x");
+  chmodSync(thumb, 0o644);
+  host.handle({ type: "file/open", path: thumb });
+  assert.deepEqual(calls, [`open ${thumb}`]);
+});
+
+test("file/open of an oversized text file notifies instead of crashing", () => {
+  const { root, posted, host } = setup();
+  const big = join(root, "data", "big.csv");
+  writeFileSync(big, "");
+  chmodSync(big, 0o644);
+  truncateSync(big, 20 * 1024 * 1024 + 1);
+  host.handle({ type: "file/open", path: big });
+  const last = posted.at(-1)!;
+  assert.ok(last.type === "notify" && last.level === "error", JSON.stringify(last));
+});
+
+test("file/save round trip through the host", () => {
+  const { root, posted, host } = setup();
+  const csv = join(root, "data", "x.csv");
+  chmodSync(csv, 0o644);
+  host.handle({ type: "file/open", path: csv });
+  const opened = posted.at(-1)!;
+  assert.ok(opened.type === "file/content");
+  const mtime = opened.type === "file/content" ? opened.mtimeMs : 0;
+  assert.equal(host.handle({ type: "file/save", path: csv, content: "a,b\n", expectedMtimeMs: mtime }), true);
+  const saved = posted.at(-1)!;
+  assert.deepEqual(saved, { type: "file/saved", path: csv, ok: true, mtimeMs: statSync(csv).mtimeMs });
+  assert.equal(readFileSync(csv, "utf8"), "a,b\n");
+});
+
+test("save detects on-disk change", () => {
+  const { root, posted, host } = setup();
+  const csv = join(root, "data", "x.csv");
+  host.handle({ type: "file/open", path: csv });
+  const opened = posted.at(-1)!;
+  const mtime = opened.type === "file/content" ? opened.mtimeMs : 0;
+  // the agent rewrites the file
+  writeFileSync(csv, "agent\n");
+  utimesSync(csv, new Date(mtime + 5000), new Date(mtime + 5000));
+  host.handle({ type: "file/save", path: csv, content: "mine\n", expectedMtimeMs: mtime });
+  assert.deepEqual(posted.at(-1), { type: "file/saved", path: csv, ok: false, error: "changed-on-disk" });
+  assert.equal(readFileSync(csv, "utf8"), "agent\n");
+  // Overwrite: expectedMtimeMs -1 skips the check
+  host.handle({ type: "file/save", path: csv, content: "mine\n", expectedMtimeMs: -1 });
+  const ok = posted.at(-1)!;
+  assert.ok(ok.type === "file/saved" && ok.ok);
+  assert.equal(readFileSync(csv, "utf8"), "mine\n");
+});
+
+test("file/save outside the workspace or into dot-dirs is refused", () => {
+  const { root, posted, host } = setup();
+  const n = posted.length;
+  const env = join(root, ".chronos", ".env");
+  const envlink = join(root, "data", "envlink");
+  symlinkSync(env, envlink);
+  for (const path of [env, envlink, join(tmpdir(), "nope.txt"), join(root, "data", "missing.md")]) {
+    assert.equal(host.handle({ type: "file/save", path, content: "PWNED", expectedMtimeMs: -1 }), true);
+  }
+  assert.equal(readFileSync(env, "utf8"), "SECRET=1\n");
+  // each refusal is answered so the renderer is not left waiting
+  const replies = posted.slice(n);
+  assert.equal(replies.length, 4);
+  assert.ok(replies.every((m) => m.type === "file/saved" && !m.ok));
 });

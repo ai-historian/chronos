@@ -1,6 +1,6 @@
 // Workspace file listing + directory watching for the file tree (Electron-free).
-import { existsSync, readdirSync, statSync, watch, type FSWatcher } from "node:fs";
-import { join, resolve } from "node:path";
+import { chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { isAllowedPath } from "./protocol-handler";
 import { compareEntries, type TreeEntry, type TreeChangeKind } from "../renderer/tree-model";
 
@@ -86,5 +86,51 @@ export class DirWatcher {
       }, DEBOUNCE_MS),
     };
     this.pending.set(path, entry);
+  }
+}
+
+/** Largest file the editor will load. */
+export const MAX_TEXT_BYTES = 20 * 1024 * 1024;
+
+export function statMtime(path: string): number {
+  return statSync(path).mtimeMs;
+}
+
+/** Read a file as utf-8 for the editor; throws for files over 20 MB. */
+export function readText(path: string): { content: string; mtimeMs: number } {
+  const st = statSync(path);
+  if (!st.isFile()) throw new Error(`${basename(path)} is not a file`);
+  if (st.size > MAX_TEXT_BYTES) throw new Error(`${basename(path)} is larger than 20 MB; open it in another app`);
+  return { content: readFileSync(path, "utf8"), mtimeMs: st.mtimeMs };
+}
+
+export type WriteResult = { ok: true; mtimeMs: number } | { ok: false; error: "changed-on-disk" | string };
+
+/**
+ * Write `content` atomically (temp file in the same dir + rename), keeping the file's mode.
+ * With `expectedMtimeMs` (and not -1), refuse with `changed-on-disk` when the file's current
+ * mtime differs — someone (usually the agent) rewrote it since the editor loaded it.
+ */
+export function writeText(path: string, content: string, expectedMtimeMs?: number): WriteResult {
+  let mode: number | undefined;
+  try {
+    const st = statSync(path);
+    mode = st.mode & 0o7777;
+    if (expectedMtimeMs !== undefined && expectedMtimeMs !== -1 && st.mtimeMs !== expectedMtimeMs) {
+      return { ok: false, error: "changed-on-disk" };
+    }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") return { ok: false, error: (e as Error).message };
+  }
+  // Dot-prefixed so the file-tree watcher ignores the temp file.
+  const tmp = join(dirname(path), `.${basename(path)}.chronos-${process.pid}-${Date.now().toString(36)}.tmp`);
+  try {
+    writeFileSync(tmp, content, "utf8");
+    if (mode !== undefined) chmodSync(tmp, mode);
+    renameSync(tmp, path);
+    return { ok: true, mtimeMs: statSync(path).mtimeMs };
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    return { ok: false, error: (e as Error).message };
   }
 }

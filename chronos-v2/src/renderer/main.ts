@@ -16,6 +16,7 @@ function applyTheme(name: string, css: string): void {
     document.head.appendChild(el);
   }
   el.textContent = css;
+  window.dispatchEvent(new CustomEvent("chronos-theme-changed", { detail: { name } }));
 }
 
 const app = document.createElement("chronos-app") as ChronosApp;
