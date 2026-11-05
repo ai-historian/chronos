@@ -64,7 +64,11 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 
+# Uploads into the draft release for tag v2-<version> (created once by the release
+# workflow); the v2- prefix keeps clear of the VS Code extension's v<version> tags.
 publish:
   provider: github
   owner: ai-historian
   repo: chronos
+  tagNamePrefix: "v2-"
+  releaseType: draft
