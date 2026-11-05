@@ -113,6 +113,13 @@ export class ChronosApp extends LitElement {
 
   // The agent that issued pending dialogs/permission cards is gone (exit or
   // restart); answering them would send stale ids to the next pi process.
+  /** Permission cards, dialogs and the exit banner live in the chat pane: never leave it hidden then. */
+  private revealChat(): void {
+    if (!this.chatHidden) return;
+    this.chatHidden = false;
+    this.dispatchEvent(new CustomEvent("ui-state-changed", { bubbles: true }));
+  }
+
   private clearPendingUiRequests(): void {
     this.uiRequest = null;
     this.uiRequestQueue = [];
@@ -313,6 +320,7 @@ export class ChronosApp extends LitElement {
         break;
       }
       case "agentExited":
+        this.revealChat();
         this.clearPendingUiRequests();
         this.chat?.handleAgentExited(msg.code, msg.stderr);
         break;
@@ -321,6 +329,7 @@ export class ChronosApp extends LitElement {
         this.chat?.handleAgentRestarted();
         break;
       case "uiRequest":
+        this.revealChat();
         if (this.uiRequest) {
           this.uiRequestQueue.push(msg.request);
         } else {
@@ -334,6 +343,7 @@ export class ChronosApp extends LitElement {
         this.updateProgress(msg);
         break;
       case "permissionRequest":
+        this.revealChat();
         this.chat?.addPermissionRequest({ id: msg.id, command: msg.command, suggestedPrefix: msg.suggestedPrefix });
         break;
       case "yolo":

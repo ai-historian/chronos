@@ -76,6 +76,8 @@ export function buildMenu(
         { role: "quit" },
       ],
     },
+    // Without an Edit menu, Cmd+C/V/X/A/Z do nothing in text fields on macOS.
+    { role: "editMenu" },
     {
       label: "Session",
       enabled: ws,

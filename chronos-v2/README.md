@@ -46,9 +46,9 @@ needed. On a headless Linux box, run it under `xvfb-run`.
   (`http-server.ts`) that the agent POSTs viewer events to. `pi-launcher.ts` builds pi's
   argv/env and `paths.ts` resolves vendored vs dev pi/agent paths. `tree-host.ts` and
   `files.ts` back the file tree and file actions. `protocol-handler.ts` serves the
-  `chronos-file://local/<path>` scheme, scoped to the open workspace. `import/` is the
+  `chronos-file://local/<path>` scheme, scoped to the open workspace (never dot paths). `import/` is the
   PDF/image/text import pipeline and its workers. `login.ts` and `anthropic-oauth.ts`
-  handle provider login. `menu.ts`, `theme.ts`, `workspace.ts`, `sessions.ts` and
+  handle provider login. `app-log.ts` writes the app log. `menu.ts`, `theme.ts`, `workspace.ts`, `sessions.ts` and
   `sources.ts` cover the rest.
 - `preload/preload.ts` — exposes `window.chronos` (`postMessage`, `onMessage`,
   `getState`/`setState`, `isE2E`) over the `chronos:msg` IPC channel.
@@ -57,6 +57,17 @@ needed. On a headless Linux box, run it under `xvfb-run`.
   the welcome window.
 - `shared/webview-protocol.ts` — the typed `ExtToWebview` / `WebviewToExt` envelopes
   exchanged between main and renderer.
+
+### Logs and window behaviour
+
+The main process writes `chronos.log` into Electron's logs folder (`app.getPath("logs")`,
+e.g. `~/Library/Logs/Chronos` on macOS, `%APPDATA%\Chronos\logs` on Windows,
+`~/.config/Chronos/logs` on Linux). It holds main's `console` output and pi's stderr, never
+pi's environment (API keys). Each start rotates the previous log to `chronos.log.1`.
+Help ▸ Show logs reveals the file.
+
+On macOS, closing the last window keeps Chronos running in the dock, and clicking the dock
+icon opens the welcome window. On Linux and Windows the app quits with its last window.
 
 ### The `vendor/` rule
 

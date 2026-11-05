@@ -40,6 +40,8 @@ export class PiRpcSession {
   private eventListeners = new Set<(e: AgentEvent) => void>();
   private uiRequestListeners = new Set<(r: RpcExtensionUIRequest) => void>();
   private exitListeners = new Set<(code: number | null, stderrTail: string) => void>();
+  private stderrListeners = new Set<(line: string) => void>();
+  private stderrLineBuffer = "";
 
   constructor(private readonly options: PiRpcSessionOptions) {}
 
@@ -59,13 +61,17 @@ export class PiRpcSession {
       cwd: this.options.workspaceDir,
       env: { ...process.env, ...this.options.env },
       stdio: ["pipe", "pipe", "pipe"],
-      // pi is an npm bin shim (pi.cmd) on Windows; spawn can't exec it directly
-      shell: process.platform === "win32",
+      // No `shell` option, on purpose. The VS Code extension spawns the npm shim (pi.cmd) and
+      // needs `shell: true` on Windows; v2 always spawns a real executable (process.execPath =
+      // Chronos.exe running pi's cli.js). With a shell, Node joins the args unquoted into one
+      // `cmd.exe /c` line, so install/workspace paths with spaces break, and kill() hits cmd.exe.
     });
 
     this.proc.stdout.on("data", (chunk: Buffer) => this.handleStdout(chunk));
     this.proc.stderr.on("data", (chunk: Buffer) => {
-      this.stderrTail = (this.stderrTail + chunk.toString()).slice(-4000);
+      const text = chunk.toString();
+      this.stderrTail = (this.stderrTail + text).slice(-4000);
+      this.emitStderrLines(text);
     });
     this.proc.on("error", (err) => {
       this.stderrTail += `\nspawn error: ${err.message}`;
@@ -154,6 +160,28 @@ export class PiRpcSession {
   onExit(listener: (code: number | null, stderrTail: string) => void): () => void {
     this.exitListeners.add(listener);
     return () => this.exitListeners.delete(listener);
+  }
+
+  /** Called with each complete line pi writes to stderr (for the app log). */
+  onStderr(listener: (line: string) => void): () => void {
+    this.stderrListeners.add(listener);
+    return () => this.stderrListeners.delete(listener);
+  }
+
+  private emitStderrLines(text: string): void {
+    this.stderrLineBuffer += text;
+    let i: number;
+    while ((i = this.stderrLineBuffer.indexOf("\n")) !== -1) {
+      const line = this.stderrLineBuffer.slice(0, i).replace(/\r$/, "");
+      this.stderrLineBuffer = this.stderrLineBuffer.slice(i + 1);
+      if (line) for (const l of this.stderrListeners) l(line);
+    }
+    // Never let an unterminated line grow without bound.
+    if (this.stderrLineBuffer.length > 16_000) {
+      const line = this.stderrLineBuffer;
+      this.stderrLineBuffer = "";
+      for (const l of this.stderrListeners) l(line);
+    }
   }
 
   private writeLine(obj: object): void {

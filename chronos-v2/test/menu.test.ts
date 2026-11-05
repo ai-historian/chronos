@@ -25,13 +25,14 @@ const sub = (i: Item): Item[] => i.submenu as Item[];
 const item = (m: Item, label: string) => sub(m).find((i) => i.label === label)!;
 
 test("top-level menus in order (linux)", () => {
-  assert.deepEqual(buildMenu(mkActions(), base, "linux").map((i) => i.label), ["File", "Session", "Agent", "View", "Help"]);
+  const m = buildMenu(mkActions(), base, "linux");
+  assert.deepEqual(m.map((i) => i.label ?? i.role), ["File", "editMenu", "Session", "Agent", "View", "Help"]);
 });
 
 test("darwin prepends the app menu", () => {
   const m = buildMenu(mkActions(), base, "darwin");
   assert.equal(m[0].role, "appMenu");
-  assert.deepEqual(m.slice(1).map((i) => i.label), ["File", "Session", "Agent", "View", "Help"]);
+  assert.deepEqual(m.slice(1).map((i) => i.label ?? i.role), ["File", "editMenu", "Session", "Agent", "View", "Help"]);
 });
 
 test("model radios, current checked; click calls setModel", () => {

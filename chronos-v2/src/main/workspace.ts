@@ -137,15 +137,14 @@ export class RecentStore {
   }
 }
 
-/** Ask for a folder; if it is not yet a Chronos workspace, offer to initialise it. */
-async function pickAndMaybeInit(parent: Electron.BrowserWindow | null, title: string, offerInit: boolean): Promise<string | null> {
+/**
+ * Make sure `folder` is a Chronos workspace: if it is not, ask "Initialise it?" (when `ask`) and
+ * initialise it on accept. Returns false if the user declined or initialisation failed.
+ */
+export async function ensureWorkspace(folder: string, parent: Electron.BrowserWindow | null, ask = true): Promise<boolean> {
+  if (isChronosWorkspace(folder)) return true;
   const { dialog } = require("electron") as typeof import("electron");
-  const opts: Electron.OpenDialogOptions = { title, properties: ["openDirectory", "createDirectory"] };
-  const r = parent ? await dialog.showOpenDialog(parent, opts) : await dialog.showOpenDialog(opts);
-  if (r.canceled || r.filePaths.length === 0) return null;
-  const folder = resolve(r.filePaths[0]);
-  if (isChronosWorkspace(folder)) return folder;
-  if (offerInit) {
+  if (ask) {
     const mopts: Electron.MessageBoxOptions = {
       type: "question",
       message: "Not a Chronos workspace. Initialise it?",
@@ -155,15 +154,25 @@ async function pickAndMaybeInit(parent: Electron.BrowserWindow | null, title: st
       cancelId: 1,
     };
     const m = parent ? await dialog.showMessageBox(parent, mopts) : await dialog.showMessageBox(mopts);
-    if (m.response !== 0) return null;
+    if (m.response !== 0) return false;
   }
   try {
     await initWorkspace(folder);
   } catch (e) {
     dialog.showErrorBox("Could not initialise workspace", e instanceof Error ? e.message : String(e));
-    return null;
+    return false;
   }
-  return folder;
+  return true;
+}
+
+/** Ask for a folder; if it is not yet a Chronos workspace, offer to initialise it. */
+async function pickAndMaybeInit(parent: Electron.BrowserWindow | null, title: string, offerInit: boolean): Promise<string | null> {
+  const { dialog } = require("electron") as typeof import("electron");
+  const opts: Electron.OpenDialogOptions = { title, properties: ["openDirectory", "createDirectory"] };
+  const r = parent ? await dialog.showOpenDialog(parent, opts) : await dialog.showOpenDialog(opts);
+  if (r.canceled || r.filePaths.length === 0) return null;
+  const folder = resolve(r.filePaths[0]);
+  return (await ensureWorkspace(folder, parent, offerInit)) ? folder : null;
 }
 
 export function pickWorkspaceToOpen(parent: Electron.BrowserWindow | null): Promise<string | null> {

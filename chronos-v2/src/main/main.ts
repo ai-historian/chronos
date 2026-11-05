@@ -9,7 +9,8 @@ import { buildPiLaunch, type PiLaunch } from "./pi-launcher";
 import { resolveVendorPaths, unpackedPath } from "./paths";
 import { registerChronosFileScheme, installChronosFileHandler, toChronosFileUrl } from "./protocol-handler";
 import { providerChoices, saveApiKey, startAnthropicOauth, submitAnthropicOauthCode, cancelAnthropicOauth } from "./login";
-import { RecentStore, pickFolderToCreate, pickWorkspaceToOpen } from "./workspace";
+import { RecentStore, ensureWorkspace, pickFolderToCreate, pickWorkspaceToOpen } from "./workspace";
+import { appLogPath, installAppLog } from "./app-log";
 import { buildMenu, type MenuActions, type MenuState } from "./menu";
 import { readAppSettings, writeAppSettings } from "./app-settings";
 import {
@@ -39,6 +40,16 @@ function launchOverride(port: number): PiLaunch | undefined {
   const o = JSON.parse(raw) as { bin: string; args: string[]; env?: Record<string, string> };
   return { bin: o.bin, args: o.args, env: { ...(o.env ?? {}), CHRONOS_HTTP_PORT: String(port) } };
 }
+
+// Start the app log (Help ▸ Show logs) before anything else logs.
+function startAppLog(): void {
+  try {
+    installAppLog(app.getPath("logs"));
+  } catch (e) {
+    console.error("[chronos] could not open the app log:", e);
+  }
+}
+startAppLog();
 
 // Must run before app is ready.
 registerChronosFileScheme();
@@ -117,8 +128,29 @@ async function handleWelcomeMessage(win: BrowserWindow, msg: WelcomeToExt): Prom
   let path: string | null = null;
   if (msg.type === "workspace/open") path = await pickWorkspaceToOpen(win);
   else if (msg.type === "workspace/create") path = await pickFolderToCreate(win);
-  else if (msg.type === "workspace/openRecent") path = isDirectory(msg.path) ? msg.path : null;
-  if (path && !win.isDestroyed()) openMainWindow(path);
+  else if (msg.type === "workspace/openRecent") {
+    // The renderer may only name a path we offered it; anything else is ignored silently.
+    const wanted = typeof msg.path === "string" ? resolve(msg.path) : "";
+    path = recent.list().some((i) => resolve(i.path) === wanted) ? wanted : null;
+  }
+  if (path && !win.isDestroyed()) await openOrOfferInit(path, win);
+}
+
+/**
+ * The one way to open a workspace from a path: it must be a directory, and if it is not a Chronos
+ * workspace yet the user is offered to initialise it (Cancel opens nothing). `replace` swaps out
+ * an already-open main window (menu); otherwise an open main window is just focused.
+ */
+async function openOrOfferInit(path: string, parent: BrowserWindow | null, replace = false): Promise<void> {
+  const dir = resolve(path);
+  if (!isDirectory(dir)) {
+    const opts: Electron.MessageBoxOptions = { type: "error", message: "Folder not found", detail: dir, buttons: ["OK"] };
+    if (parent && !parent.isDestroyed()) await dialog.showMessageBox(parent, opts);
+    else await dialog.showMessageBox(opts);
+    return;
+  }
+  if (!(await ensureWorkspace(dir, parent && !parent.isDestroyed() ? parent : null))) return;
+  openMainWindow(dir, replace);
 }
 
 function isDirectory(p: string): boolean {
@@ -228,6 +260,12 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
       cancel: cancelAnthropicOauth,
     },
     onImport: () => void importSources(),
+    // The agent is blocked on the user (permission card / dialog): get their attention.
+    onAttention: () => {
+      if (win.isDestroyed() || win.isFocused()) return;
+      win.flashFrame(true);
+      app.dock?.bounce?.("informational");
+    },
   });
   const h = host;
   activeHost = h;
@@ -246,6 +284,9 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
     void promptRecoverIncompleteImports(win, h, workspaceDir);
   });
 
+  win.on("focus", () => {
+    if (!win.isDestroyed()) win.flashFrame(false);
+  });
   win.on("close", () => {
     if (mainWindow !== win) return;
     // A close we did not start (title-bar ✕) means "back to welcome", unless the app is quitting.
@@ -274,7 +315,9 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
     if (quitting || mainWindow) return;
     if (after.kind === "open") openMainWindow(after.path);
     else if (after.kind === "welcome") createWelcomeWindow();
-    // "quit": no window left, so window-all-closed quits (resuming a quit the renderer paused).
+    // "quit": resume the quit the renderer paused. Explicit, because on macOS window-all-closed
+    // does not quit.
+    else app.quit();
   });
   // Dev aid: CHRONOS_DEV_PROTOCOL_CHECK=1 loads an in-workspace PNG (expect loaded) and an outside file (expect blocked, i.e. 403) via <img>, since the renderer CSP forbids fetch().
   if (process.env.CHRONOS_DEV_PROTOCOL_CHECK === "1") {
@@ -476,9 +519,10 @@ async function newWorkspaceFromMenu(): Promise<void> {
 }
 
 async function openWorkspaceFromMenu(path?: string): Promise<void> {
-  const target = path ?? (await pickWorkspaceToOpen(BrowserWindow.getFocusedWindow()));
+  const parent = BrowserWindow.getFocusedWindow();
+  const target = path ?? (await pickWorkspaceToOpen(parent));
   if (!target) return;
-  openMainWindow(target, true);
+  await openOrOfferInit(target, parent, true);
 }
 
 function agentVersion(): string {
@@ -509,9 +553,14 @@ function aboutText(): string {
 }
 
 function showLogs(): void {
+  const file = appLogPath();
+  if (file) {
+    shell.showItemInFolder(file);
+    return;
+  }
   const dir = app.getPath("logs");
   mkdirSync(dir, { recursive: true });
-  shell.showItemInFolder(dir);
+  void shell.openPath(dir);
 }
 
 function menuActions(): MenuActions {
@@ -519,7 +568,7 @@ function menuActions(): MenuActions {
   return {
     newWorkspace: () => void newWorkspaceFromMenu(),
     openWorkspace: () => void openWorkspaceFromMenu(),
-    openRecent: (p) => void (isDirectory(p) ? openWorkspaceFromMenu(p) : undefined),
+    openRecent: (p) => void openWorkspaceFromMenu(p),
     importSources: () => void importSources(),
     closeWorkspace,
     newSession: () => hostMsg({ type: "newSession" }),
@@ -571,12 +620,26 @@ app.whenReady().then(() => {
   rebuildMenu();
   installChronosFileHandler(() => (currentWorkspace ? [currentWorkspace] : []));
   const fromArgv = workspaceFromArgv(process.argv);
-  if (fromArgv) openMainWindow(fromArgv);
-  else createWelcomeWindow();
+  if (!fromArgv) {
+    createWelcomeWindow();
+    return;
+  }
+  // Same checks as every other open; fall back to the welcome window if nothing opened.
+  void openOrOfferInit(fromArgv, null).then(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) createWelcomeWindow();
+  });
 });
 app.on("before-quit", () => {
   quitting = true;
   // If the main window's renderer pauses the quit for unsaved edits, finish it after window/close.
   if (mainWindow && !mainWindow.isDestroyed()) mainAfterClose = { kind: "quit" };
 });
-app.on("window-all-closed", () => app.quit());
+// macOS convention: closing the last window keeps the app running (in the dock); clicking the dock
+// icon then reopens the welcome window. Linux/Windows quit with the last window.
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+app.on("activate", () => {
+  if (!app.isReady() || quitting || !recent) return;
+  if (BrowserWindow.getAllWindows().length === 0) createWelcomeWindow();
+});

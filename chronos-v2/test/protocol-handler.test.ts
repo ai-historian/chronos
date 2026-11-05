@@ -74,3 +74,19 @@ test("resolveAllowedPath serves regular files only, as realpath", () => {
   assert.equal(resolveAllowedPath([root], join(root, "alias.png")), join(root, "d", "a.png"));
   assert.equal(resolveAllowedPath([], join(root, "d", "a.png")), null);
 });
+
+test("rejects dot-dir inside root", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ws-")));
+  mkdirSync(join(root, ".chronos"));
+  writeFileSync(join(root, ".chronos", ".env"), "ANTHROPIC_API_KEY=secret\n");
+  writeFileSync(join(root, ".hidden.png"), "x");
+  assert.equal(resolveAllowedPath([root], join(root, ".chronos", ".env")), null);
+  assert.equal(resolveAllowedPath([root], join(root, ".hidden.png")), null);
+  // A non-dot alias whose real target is a dot path is refused too.
+  symlinkSync(join(root, ".chronos", ".env"), join(root, "env.png"));
+  assert.equal(resolveAllowedPath([root], join(root, "env.png")), null);
+  // A root that itself lives under a dot dir is fine.
+  const dotParent = realpathSync(mkdtempSync(join(tmpdir(), ".ws-")));
+  writeFileSync(join(dotParent, "a.png"), "x");
+  assert.equal(resolveAllowedPath([dotParent], join(dotParent, "a.png")), join(dotParent, "a.png"));
+});

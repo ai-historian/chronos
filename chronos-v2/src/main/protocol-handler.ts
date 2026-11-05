@@ -1,5 +1,5 @@
 import { lstatSync, realpathSync, statSync } from "node:fs";
-import { resolve, sep, dirname, basename, join } from "node:path";
+import { resolve, sep, dirname, basename, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const SCHEME = "chronos-file";
@@ -40,6 +40,7 @@ export function isAllowedPath(root: string, candidate: string): boolean {
 
 /**
  * Returns the realpath-resolved regular file for `candidate` if it lies inside any root, else null.
+ * Any path segment (relative to the root) starting with "." is refused.
  * The caller must serve the returned path (not the original) so check and use cannot diverge.
  */
 export function resolveAllowedPath(roots: string[], candidate: string): string | null {
@@ -52,7 +53,11 @@ export function resolveAllowedPath(roots: string[], candidate: string): string |
   }
   for (const root of roots) {
     const r = realish(root);
-    if (r !== null && inside(r, real)) return real;
+    if (r === null || !inside(r, real)) continue;
+    // Never serve dot paths (.chronos/.env with API keys, .pi/, …): same rule as tree-host's validate.
+    const rel = relative(r, real);
+    if (rel && rel.split(sep).some((seg) => seg.startsWith("."))) return null;
+    return real;
   }
   return null;
 }
@@ -77,7 +82,8 @@ export function fromChronosFileUrl(url: string, platform: NodeJS.Platform = proc
 export function registerChronosFileScheme(): void {
   const { protocol } = require("electron") as typeof import("electron");
   protocol.registerSchemesAsPrivileged([
-    { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+    // No supportFetchAPI: only <img> loads use the scheme (the renderer CSP forbids fetch anyway).
+    { scheme: SCHEME, privileges: { standard: true, secure: true, stream: true } },
   ]);
 }
 

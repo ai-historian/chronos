@@ -5,6 +5,7 @@ import type { ModelInfo, RpcExtensionUIRequest, RpcSessionState, RpcSlashCommand
 import type { AgentToExtensionMessage } from "./protocol";
 import type { Bbox, ExtToWebview, WebviewToExt } from "../shared/webview-protocol";
 import { HttpServer } from "./http-server";
+import { appendAppLog } from "./app-log";
 import { discoverSources, countPages } from "./sources";
 import { listSessions, readSessionMessages } from "./sessions";
 import { readChronosSettings, writeChronosSettings, suggestPrefix, commandMatchesPrefix } from "./chronos-settings";
@@ -219,6 +220,9 @@ export class AgentHost {
       env: launch.env,
     });
     this.rpc = rpc;
+    // Bin and args only — launch.env holds API keys/tokens and is never logged.
+    console.log(`[chronos] starting pi: ${launch.bin} ${launch.args.map((a) => JSON.stringify(a)).join(" ")}`);
+    rpc.onStderr((line) => appendAppLog(`[pi] ${line}`));
 
     rpc.onEvent((event) => {
       if (event.type === "agent_start") this.isStreaming = true;
