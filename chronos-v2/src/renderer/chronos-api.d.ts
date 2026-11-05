@@ -7,6 +7,7 @@ declare global {
       onMessage(cb: (msg: ExtToWebview) => void): void;
       getState(): unknown;
       setState(s: unknown): void;
+      isE2E(): boolean;
     };
   }
 }

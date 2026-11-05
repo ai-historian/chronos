@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld("chronos", {
       return undefined;
     }
   },
+  /** TEST-ONLY: true when launched by the e2e suite (CHRONOS_E2E=1). */
+  isE2E(): boolean {
+    return process.env.CHRONOS_E2E === "1";
+  },
   setState(s: unknown): void {
     try {
       localStorage.setItem(STATE_KEY, JSON.stringify(s));

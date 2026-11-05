@@ -452,8 +452,15 @@ export class ChronosApp extends LitElement {
     }
   }
 
+  /** Test-only state snapshot (see collectTestState); exposed to the e2e suite by main.ts. */
+  testState(): unknown {
+    return this.collectTestState();
+  }
+
   private collectTestState(): unknown {
     return {
+      models: this.models.map((m) => ({ id: m.id, provider: m.provider })),
+      uiRequest: this.uiRequest ? { id: this.uiRequest.id, method: this.uiRequest.method } : null,
       currentSource: this.currentSource,
       viewerTab: this.viewerTab,
       tabs: this.tabs.tabs.map((t) => ({ id: t.id, kind: t.kind, dirty: t.dirty })),

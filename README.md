@@ -8,6 +8,18 @@ An AI agent that collaborates with historians to extract structured datasets fro
 
 ![Chronos demo](demo.png)
 
+## Standalone app (Chronos v2)
+
+Chronos v2 is also a standalone desktop app. It includes the agent and doesn't need VS Code, Node.js or a separate `pi` install. Download the installer for your system from the [releases page](https://github.com/ai-historian/chronos/releases) (releases tagged `v2-*`):
+
+- **Windows**: `Chronos.Setup.<version>.exe` (NSIS installer)
+- **macOS**: `Chronos-<version>-arm64.dmg` (Apple Silicon) or `Chronos-<version>-x64.dmg` (Intel)
+- **Linux**: `Chronos-<version>.AppImage`, or `chronos_<version>_amd64.deb` for Debian/Ubuntu
+
+Builds are currently unsigned, so Windows SmartScreen and macOS Gatekeeper may warn on first launch. Developer notes are in [`chronos-v2/README.md`](chronos-v2/README.md).
+
+The sections below describe the VS Code extension.
+
 ## Prerequisites
 
 - [VS Code](https://code.visualstudio.com/) (v1.110+)

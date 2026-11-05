@@ -22,7 +22,8 @@
     "dev": "npm run build && electron . --no-sandbox",
     "dist": "npm run bundle-agent && npm run build && electron-builder",
     "bundle-agent": "node scripts/bundle-agent.mjs",
-    "canary": "node --import tsx scripts/rpc-canary.mjs"
+    "canary": "node --import tsx scripts/rpc-canary.mjs",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

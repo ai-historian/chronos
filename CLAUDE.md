@@ -8,6 +8,7 @@ Chronos is an AI agent that helps historians extract structured data from scanne
 
 - **`chronos/`** — a [`pi`](https://github.com/badlogic/pi-mono) **pi-package**: the agent itself (custom tools, prompts, lifecycle hooks). It is *not* a standalone program — it is loaded into the user's globally-installed `pi` agent at runtime.
 - **`chronos-vscode/`** — the VS Code extension: a host process (`src/`) plus a Lit web-component UI (`webview/`) that drives a `pi` subprocess and renders the page viewer + chat.
+- **`chronos-v2/`**: the standalone Electron app (Chronos v2). It bundles pi and the `chronos/` agent and does not need VS Code. See the `chronos-v2/` section below.
 
 The repo root is also a pi-package wrapper (`package.json` `pi` field points into `chronos/`), so `pi install <repo>` registers the agent.
 
@@ -64,15 +65,35 @@ Key tools: `task`/`task_batch` (spawn persistent vision-expert subagents per pag
 
 - **pi loads the agent from `dist/`, not the TS source.** The `pi` field points extensions at `./dist/extensions`. After editing anything under `chronos/{extensions,tools,utils,http}/*.ts` you MUST `cd chronos && npm run build` or the change won't take effect. Prompts and skills (`chronos/prompts/`, workspace `skills/`) are read live — no rebuild needed.
 - **Which package pi runs is set in `~/.pi/agent/settings.json` `packages`.** Released use points at the GitHub repo (cloned under `~/.pi/agent/git/`). For local development, point that entry at the absolute path of the `chronos/` dir so sessions run your working copy (after building). Sessions snapshot at startup — restart the session to pick up agent changes.
-- **pi packages were renamed.** `@mariozechner/pi-{coding-agent,ai}` are deprecated (frozen at 0.73.x); the maintained packages are `@earendil-works/pi-{coding-agent,ai}` (same author, a scope rename). Both the pi-package's peer deps and the installed `pi` binary now use `@earendil-works`. **Runtime pi ≠ build-time pi:** the build-time package in `chronos/node_modules` and the globally-installed `pi` binary can still drift in version — when debugging pi behavior, read the binary's actual install, not `chronos/node_modules`. The 0.79 API differs from 0.73 (e.g. `session_switch`/`session_directory` hooks were dropped — `session_start` now carries a `reason`, and `PI_CODING_AGENT_SESSION_DIR` replaces the session-dir hook).
+- **pi packages were renamed.** `@mariozechner/pi-{coding-agent,ai}` are deprecated (frozen at 0.73.x); the maintained packages are `@earendil-works/pi-{coding-agent,ai}` (same author, a scope rename). Both the pi-package's peer deps and the installed `pi` binary now use `@earendil-works`. **Runtime pi ≠ build-time pi:** the build-time package in `chronos/node_modules` and the globally-installed `pi` binary can still drift in version — when debugging pi behavior, read the binary's actual install, not `chronos/node_modules`. The current API is pi 0.84 (`chronos-v2` pins `0.84.4`, see `piVersion` in its `package.json`), and it differs from 0.73. For example, the `session_switch`/`session_directory` hooks were dropped: `session_start` now carries a `reason`, and `PI_CODING_AGENT_SESSION_DIR` replaces the session-dir hook. Streaming changed too. An RPC `message_update` event now carries an `assistantMessageEvent` delta (`text_start`/`text_delta`/`text_end`, likewise for thinking and tool calls, with a `contentIndex`) plus `usage`, not the whole partial message. The client rebuilds the message between `message_start` and `message_end` (see `chronos-v2/src/renderer/stream-assembler.ts`).
 - **Every `.md` in `chronos/prompts/` becomes a slash command** because pi auto-registers prompt templates. Only `select-source` and `yolo` are real user commands; the rest are tool text / the system prompt. The webview slash-command menu therefore filters out `source: "prompt"` entries with `sourceInfo.origin === "package"` (see `chronos-panel.ts`).
 
 ### Workspace layout (user-facing, created by `Chronos: Init Workspace`)
 
 A Chronos *workspace* (separate from this repo) contains `sources/<name>/png/page_NNNN.png`, `data/` (outputs), `memory/` (`MEMORY.MD` + per-source `.md`, injected into the system prompt), `skills/<name>/SKILL.md`, `sessions/`, and `.chronos/` (`.env` with provider API keys e.g. `ANTHROPIC_API_KEY`/`GEMINI_API_KEY`, written by the panel's "Log in" flow; `settings.json` for the `yolo` flag; `session-sources.json` mapping session id → selected source for resume; `session-names.json` caching auto-generated session titles). The workspace `skills/` dir is bridged into pi via `.pi/settings.json` (`{ "skills": ["../skills"] }`).
 
+## chronos-v2/ (standalone Electron app)
+
+```bash
+cd chronos-v2 && npm install
+npm run build                       # esbuild: main + preload + workers + renderer into out/
+npm run dev -- --workspace <dir>    # build + launch straight into a workspace (dev pi + ../chronos)
+npm run typecheck                   # tsc for main/preload/shared/test AND the renderer (two tsconfigs)
+npm test                            # node:test unit/integration tests (test/*.test.ts, uses test/mock-pi.mjs)
+npm run test:e2e                    # Playwright _electron boot test (test/e2e/); needs a prior build
+npm run canary                      # real pinned pi + ../chronos agent: RPC contract check after a pi bump
+npm run dist                        # bundle-agent (fills vendor/) + build + electron-builder installers
+```
+
+- **Main ↔ renderer** go through the preload bridge `window.chronos` (`postMessage`/`onMessage`/`getState`/`setState`) on one IPC channel, `chronos:msg`. The envelopes are the same typed `ExtToWebview`/`WebviewToExt` as before (`src/shared/webview-protocol.ts`). The renderer root is `chronos-app` (Lit).
+- **Main process.** `src/main/main.ts` handles windows, menu, import and login. `AgentHost` (`agent-host.ts`) is the Electron-free port of `ChronosPanel`: it owns the `pi --mode rpc` subprocess (`rpc/pi-rpc-session.ts`) and the HTTP push server, the same two channels as the extension. `TreeHost` (`tree-host.ts`) serves the file tree and file open/save. `pi-launcher.ts` builds pi's argv/env (pi runs under Electron's binary with `ELECTRON_RUN_AS_NODE=1`, using `PI_CODING_AGENT_DIR` under userData and `PI_CODING_AGENT_SESSION_DIR` = `<workspace>/sessions`). `paths.ts` picks the vendored or dev pi/agent paths.
+- **The `vendor/` rule.** `vendor/` is gitignored and used only when packaged. `npm run dist` (via `scripts/bundle-agent.mjs`) vendors the pinned pi and the *built* `../chronos` agent with production deps, and these ship as `resources/vendor/`. `npm run dev`/`npm start` use pi from `node_modules/@earendil-works/pi-coding-agent` and the agent from `../chronos`, so rebuild `chronos/` after agent changes. Never edit `vendor/`.
+- **Workspace images** are served over the custom `chronos-file://local/<abs path>` protocol (`protocol-handler.ts`). It is scoped to the open workspace and anything outside gets a 403. The renderer CSP allows images only from `chronos-file:` and `data:`.
+- **Tests.** Unit and integration tests live in `test/*.test.ts` (node:test via tsx). `test/mock-pi.mjs` is a deterministic fake pi. The Electron e2e test is `test/e2e/boot.spec.ts`, configured by `playwright.config.ts`. It uses the test-only env flags `CHRONOS_PI_LAUNCH_OVERRIDE` (JSON `{bin,args,env?}` replacing the pi launch) and `CHRONOS_E2E=1` (exposes `window.__chronosTestState()` and main's `globalThis.__chronosE2E.agentPid()`). See `chronos-v2/README.md`.
+
 ## Reference
 
 - `README.md` — install + getting-started (extension auto-installs `pi` and the pi-package on first run).
 - `DOCS.md` — tool reference, SKILL.md format, memory system, bbox cropping.
 - `chronos-vscode/TESTING.md` — test commands + manual smoke checklist.
+- `chronos-v2/README.md` — standalone app: development, tests, env flags, building installers, releasing.

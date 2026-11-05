@@ -5,7 +5,7 @@ import { resolveTheme, themeCss, type ThemeName } from "./theme";
 import { WindowTransport } from "./window-transport";
 import { AgentHost } from "./agent-host";
 import { TreeHost } from "./tree-host";
-import { buildPiLaunch } from "./pi-launcher";
+import { buildPiLaunch, type PiLaunch } from "./pi-launcher";
 import { resolveVendorPaths, unpackedPath } from "./paths";
 import { registerChronosFileScheme, installChronosFileHandler, toChronosFileUrl } from "./protocol-handler";
 import { providerChoices, saveApiKey, startAnthropicOauth, submitAnthropicOauthCode, cancelAnthropicOauth } from "./login";
@@ -27,6 +27,17 @@ function workspaceFromArgv(argv: string[]): string | undefined {
   const i = argv.indexOf("--workspace");
   const dir = i >= 0 ? argv[i + 1] : undefined;
   return dir ? resolve(dir) : undefined;
+}
+
+/**
+ * TEST-ONLY: CHRONOS_PI_LAUNCH_OVERRIDE (JSON `{ bin, args, env? }`) replaces the bundled pi
+ * launch — the e2e suite points it at test/mock-pi.mjs. CHRONOS_HTTP_PORT is merged in.
+ */
+function launchOverride(port: number): PiLaunch | undefined {
+  const raw = process.env.CHRONOS_PI_LAUNCH_OVERRIDE;
+  if (!raw) return undefined;
+  const o = JSON.parse(raw) as { bin: string; args: string[]; env?: Record<string, string> };
+  return { bin: o.bin, args: o.args, env: { ...(o.env ?? {}), CHRONOS_HTTP_PORT: String(port) } };
 }
 
 // Must run before app is ready.
@@ -177,6 +188,7 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
     workspaceDir,
     transport,
     launch: (port) =>
+      launchOverride(port) ??
       buildPiLaunch({
         vendor: resolveVendorPaths({
           isPackaged: app.isPackaged,
@@ -219,6 +231,8 @@ function createMainWindow(workspaceDir: string): BrowserWindow {
   });
   const h = host;
   activeHost = h;
+  // TEST-ONLY (CHRONOS_E2E=1): lets the e2e suite read the agent's pid via electronApp.evaluate.
+  if (process.env.CHRONOS_E2E === "1") (globalThis as any).__chronosE2E = { agentPid: () => activeHost?.agentPid };
   hostState = { models: [], thinking: "off", yolo: false };
   const unsubscribe = h.onStateChange((st) => {
     hostState = st;

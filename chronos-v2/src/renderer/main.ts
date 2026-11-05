@@ -30,4 +30,7 @@ chronos.onMessage((msg: ExtToWebview) => {
   else app.handleMessage(msg);
 });
 
+// TEST-ONLY: the e2e suite (CHRONOS_E2E=1) reads the app's state snapshot directly.
+if (chronos.isE2E()) (window as any).__chronosTestState = () => app.testState();
+
 chronos.postMessage({ type: "ready" });
