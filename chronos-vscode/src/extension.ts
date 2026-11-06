@@ -20,6 +20,7 @@ import {
   countPartialPages,
   findIncompleteImports,
 } from "./import-status";
+import { TRACE_ENTITY_SKILL } from "./workspace-templates";
 
 // pi's npm package. @mariozechner/pi-coding-agent is deprecated and frozen at
 // 0.73.1 ("use @earendil-works/pi-coding-agent going forward"); the renamed
@@ -97,13 +98,25 @@ function bootstrapReconciled(context: vscode.ExtensionContext): boolean {
 // second panel + pi subprocess before ChronosPanel.current is assigned.
 let startingSession = false;
 
-// Run a shell command as a VS Code task and resolve with its exit code. A task
-// runs in the user's shell — login-shell PATH, sudo prompts, visible output, just
-// like the integrated terminal — but unlike terminal.sendText it reports
+// Run setup commands in order, resolving with the first non-zero exit code (0 if
+// all succeed). Each command is its own task rather than one `a && b` shell line:
+// Windows PowerShell 5.1 — still the default shell on many Windows machines —
+// rejects `&&` as a statement separator, and no separator works across
+// cmd/PowerShell/POSIX shells. Tasks share a name so they reuse one terminal panel.
+function runSetupTask(name: string, commands: string[]): Promise<number> {
+  return commands.reduce<Promise<number>>(
+    (prev, command, i) =>
+      prev.then((code) => (code === 0 ? runShellTask(name, command, i === 0) : code)),
+    Promise.resolve(0),
+  );
+}
+
+// A task runs in the user's shell — login-shell PATH, sudo prompts, visible output,
+// just like the integrated terminal — but unlike terminal.sendText it reports
 // completion, so the caller can await the install and continue automatically
 // instead of asking the user to re-run the command. Never rejects: a failure to
 // launch resolves to -1 so callers handle it uniformly via the exit code.
-function runSetupTask(name: string, command: string): Promise<number> {
+function runShellTask(name: string, command: string, clear: boolean): Promise<number> {
   const task = new vscode.Task(
     { type: "chronos-setup" },
     vscode.TaskScope.Workspace,
@@ -114,7 +127,8 @@ function runSetupTask(name: string, command: string): Promise<number> {
   task.presentationOptions = {
     reveal: vscode.TaskRevealKind.Always,
     panel: vscode.TaskPanelKind.Dedicated,
-    clear: true,
+    // Only the first step clears, so a multi-step run reads as one log.
+    clear,
     focus: false,
     echo: true,
   };
@@ -168,7 +182,7 @@ async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolea
     if (choice !== "Install") return false;
     const code = await runSetupTask(
       "Install pi + Chronos agent",
-      `npm install -g ${npmPackage} && pi install ${wantedSource}`,
+      [`npm install -g ${npmPackage}`, `pi install ${wantedSource}`],
     );
     if (code !== 0 || !hasPi()) {
       vscode.window.showErrorMessage(
@@ -221,11 +235,10 @@ async function ensureBootstrap(context: vscode.ExtensionContext): Promise<boolea
     : hasLegacyPiPackage()
       ? [LEGACY_PI_PACKAGE]
       : [];
-  const migrate = removals.map((r) => `pi remove ${r} && `).join("");
-  const code = await runSetupTask(
-    `Set up Chronos pi-package (${wantedId})`,
-    `${migrate}pi install ${wantedSource}`,
-  );
+  const code = await runSetupTask(`Set up Chronos pi-package (${wantedId})`, [
+    ...removals.map((r) => `pi remove ${r}`),
+    `pi install ${wantedSource}`,
+  ]);
   if (code !== 0 || !hasChronosPiPackage()) {
     vscode.window.showErrorMessage(
       `Chronos pi-package setup failed (exit code ${code}). Check the task terminal, then run "Chronos: Install Dependencies" to retry.`,
@@ -276,7 +289,7 @@ function writeIfMissing(filePath: string, content: string): void {
 
 async function initWorkspace(folder: string): Promise<boolean> {
   // Create directory structure
-  for (const dir of ["sources", "memory", "skills", "sessions", ".chronos", ".pi"]) {
+  for (const dir of ["sources", "memory", "skills", "sessions", "collections", ".chronos", ".pi"]) {
     mkdirSync(join(folder, dir), { recursive: true });
   }
 
@@ -290,6 +303,10 @@ async function initWorkspace(folder: string): Promise<boolean> {
   // Memory files
   writeIfMissing(join(folder, "memory", "MEMORY.MD"), "");
 
+  // Seed the long-horizon "trace an entity" skill (non-destructive — edits are kept).
+  mkdirSync(join(folder, "skills", "trace-entity"), { recursive: true });
+  writeIfMissing(join(folder, "skills", "trace-entity", "SKILL.md"), TRACE_ENTITY_SKILL);
+
   // README
   writeIfMissing(join(folder, "README.md"),
 `# Chronos Workspace
@@ -301,6 +318,7 @@ This folder is a Chronos workspace for digitizing historical documents.
 \`\`\`
 sources/          Place your source directories here (each with a png/ subfolder)
 data/             Per-source extraction results and outputs
+collections/      Named collection manifests (<name>.json grouping member sources)
 memory/           Agent memory files (MEMORY.MD, per-source notes)
 skills/           Skill definitions (markdown task instructions)
 sessions/         Agent session logs (auto-generated)
@@ -743,8 +761,16 @@ export function activate(context: vscode.ExtensionContext): {
         // Bind the HTTP server (lazily) so the port is assigned before the agent starts.
         await httpServer.start();
 
+        // User-tunable agent limits (contributed settings) are forwarded to the
+        // pi-package as env vars; it parses them defensively (see utils/env-config.ts).
+        const chronosCfg = vscode.workspace.getConfiguration("chronos");
         const agentEnv = {
           CHRONOS_HTTP_PORT: String(httpServer.port),
+          CHRONOS_MAX_EXPERT_TOOL_CALLS: String(chronosCfg.get<number>("maxExpertToolCalls", 100)),
+          CHRONOS_MAX_CONCURRENCY: String(chronosCfg.get<number>("maxConcurrency", 20)),
+          CHRONOS_MAX_IMAGE_DIMENSION: String(chronosCfg.get<number>("maxImageDimension", 2576)),
+          CHRONOS_EXPERT_RETRIES: String(chronosCfg.get<number>("expertRetries", 3)),
+          CHRONOS_EXPERT_TIMEOUT: String(chronosCfg.get<number>("expertRequestTimeout", 300)),
           // pi >= 0.7x dropped the session_directory extension hook; this env var
           // keeps session transcripts inside the workspace in both UI modes.
           PI_CODING_AGENT_SESSION_DIR: join(workspaceFolder, "sessions"),
