@@ -8,8 +8,8 @@ center pane (page viewer, data viewer, text editors, images) and the agent chat.
 
 ## Development
 
-Prerequisites: Node ≥ 22. Nothing else is needed: Electron, the pinned pi
-(`@earendil-works/pi-coding-agent`, see `piVersion` in `package.json`) and Playwright are
+Prerequisites: Node ≥ 22.19 (pi's floor). Nothing else is needed: Electron, the pinned pi
+(`@earendil-works/pi-coding-agent@1.5.0`, see `piVersion` in `package.json`) and Playwright are
 devDependencies. In dev the app loads the agent from the sibling `../chronos` checkout, so
 build that once (`cd ../chronos && npm install && npm run build`) and again after you
 change it.
