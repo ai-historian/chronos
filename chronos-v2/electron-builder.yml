@@ -1,0 +1,74 @@
+# electron-builder config for the Chronos standalone app.
+# `npm run dist` = bundle-agent (vendor/) + esbuild (out/) + electron-builder.
+# Signing is electron-builder's default: only when CSC_LINK / CSC_KEY_PASSWORD are set.
+appId: org.ai-historian.chronos
+productName: Chronos
+
+directories:
+  output: dist
+  buildResources: resources
+
+# Production `dependencies` are auto-included from node_modules; mupdf is listed
+# explicitly because the import workers load it at runtime (it is external to esbuild).
+files:
+  - out/**
+  - package.json
+  - node_modules/mupdf/**
+  - resources/icon.png
+
+# Never enter the asar: the pi runtime + chronos agent (spawned with ELECTRON_RUN_AS_NODE)
+# and the third-party licence texts.
+extraResources:
+  - from: vendor
+    to: vendor
+  - from: resources/licenses
+    to: licenses
+
+# worker_threads cannot load scripts from inside an asar (see unpackedPath in src/main/paths.ts).
+asarUnpack:
+  - out/pdf-worker.js
+  - out/pdf-split-worker.js
+  - node_modules/mupdf/**
+
+linux:
+  target: [deb, AppImage]
+  # Without these the deb/AppImage binary and .desktop entry take package.json "name" (chronos-v2).
+  executableName: chronos
+  desktop:
+    entry:
+      Name: Chronos
+  category: Office
+  icon: resources/icon.png
+  maintainer: Lorenz Hufe <lorenz.hufe@posteo.de>
+
+deb:
+  packageName: chronos
+  artifactName: "chronos_${version}_${arch}.${ext}"
+
+# Single-arch only: vendor/chronos/node_modules holds the sharp/@img prebuilds of the
+# machine that ran bundle-agent, so a universal (or cross-arch) dmg would ship the wrong
+# native binaries. The arch comes from the CLI (--arm64 / --x64) and each dmg is built on
+# a runner of that arch (see .github/workflows/v2-release.yml).
+mac:
+  target: [dmg]
+  # dmg-builder drops the arch from the default name for x64; force it so both dmgs differ.
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  notarize: false
+
+win:
+  target: [nsis]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+# Uploads into the draft release for tag v2-<version> (created once by the release
+# workflow); the v2- prefix keeps clear of the VS Code extension's v<version> tags.
+publish:
+  provider: github
+  owner: ai-historian
+  repo: chronos
+  tagNamePrefix: "v2-"
+  releaseType: draft

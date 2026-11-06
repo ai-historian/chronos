@@ -1,0 +1,38 @@
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+  font-size: 13px;
+  overflow: hidden;
+}
+chronos-welcome { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; padding: 28px 40px; }
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand img { width: 48px; height: 48px; }
+.brand h1 { margin: 0; font-size: 26px; font-weight: 600; }
+.actions { display: flex; gap: 10px; margin: 22px 0 18px; }
+button {
+  font: inherit;
+  padding: 6px 14px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+button:hover { background: var(--vscode-button-hoverBackground); }
+button.secondary {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+}
+button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+h2 { margin: 0 0 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.7; }
+.recent { flex: 1; overflow-y: auto; }
+.item {
+  display: block; width: 100%; text-align: left; background: none; color: inherit;
+  border: none; padding: 6px 8px; border-radius: 4px;
+}
+.item:hover { background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.15)); }
+.item .name { display: block; font-weight: 500; }
+.item .path { display: block; font-size: 11px; opacity: 0.65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { opacity: 0.6; padding: 6px 8px; }

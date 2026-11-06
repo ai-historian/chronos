@@ -1,0 +1,103 @@
+name: v2 release
+
+# Release flow for the Chronos standalone app (chronos-v2/):
+#   push tag v2-<version> (must equal chronos-v2/package.json "version", e.g. v2-0.3.0)
+#   -> the `release` job creates ONE draft GitHub release for that tag
+#   -> each `installers` leg builds its OS/arch and uploads into that draft
+#      (electron-builder publish: tagNamePrefix "v2-", releaseType draft)
+#   -> publish the draft manually once all artefacts are attached.
+# A workflow_dispatch run (no tag) builds every installer with --publish never
+# (artefacts stay on the runners; nothing is released).
+on:
+  push:
+    tags: ["v2-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Draft release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        if: github.ref_type == 'tag'
+
+      - name: Check tag matches package.json version
+        if: github.ref_type == 'tag'
+        run: |
+          expected="v2-$(node -p "require('./chronos-v2/package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match chronos-v2/package.json version (expected $expected). Bump the version or re-tag."
+            exit 1
+          fi
+
+      # Created once here so the parallel installer legs don't race to create duplicate drafts.
+      - name: Create draft release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" \
+            || gh release create "$GITHUB_REF_NAME" --draft --title "Chronos $GITHUB_REF_NAME" --notes "Standalone app build"
+
+  installers:
+    name: Installers (${{ matrix.os }} ${{ matrix.args }})
+    needs: release
+    strategy:
+      fail-fast: false
+      # vendor/ carries the sharp/@img native prebuilds of the runner that ran bundle-agent,
+      # so every installer is built on a runner of its own OS *and* arch: no universal or
+      # cross-arch mac builds (macos-latest is arm64; macos-15-intel is x64). The x64 macOS
+      # leg depends on GitHub still offering an Intel runner label — update it when that
+      # label is retired.
+      matrix:
+        include:
+          - { os: ubuntu-latest, args: "--linux" }
+          - { os: windows-latest, args: "--win" }
+          - { os: macos-latest, args: "--mac --arm64" }
+          - { os: macos-15-intel, args: "--mac --x64" }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: chronos-v2
+    env:
+      # Pin the download caches to one path on every OS so actions/cache can restore them.
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            chronos/package-lock.json
+            chronos-v2/package-lock.json
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            .cache/electron
+            .cache/electron-builder
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('chronos-v2/package-lock.json') }}
+
+      - name: Install
+        run: npm ci
+
+      # Populates vendor/ (pi runtime + the ../chronos agent with this OS's sharp prebuilds).
+      - name: Bundle agent
+        run: npm run bundle-agent
+
+      - name: Build
+        run: npm run build
+
+      # Tag runs upload into the draft release; workflow_dispatch runs only build.
+      - name: Package (and publish on tags)
+        run: npx electron-builder ${{ matrix.args }} --publish ${{ github.ref_type == 'tag' && 'always' || 'never' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
