@@ -52,9 +52,9 @@ test("empty models shows disabled placeholder", () => {
   assert.equal(sm[0].enabled, false);
 });
 
-test("thinking has six radios, current checked", () => {
+test("thinking has seven radios (incl. max), current checked", () => {
   const sm = sub(item(top(buildMenu(mkActions(), base, "linux"), "Agent"), "Thinking level"));
-  assert.equal(sm.length, 6);
+  assert.equal(sm.length, 7);
   assert.ok(sm.every((i) => i.type === "radio"));
   assert.deepEqual(sm.filter((i) => i.checked).map((i) => i.label), ["high"]);
 });

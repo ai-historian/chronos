@@ -1,4 +1,5 @@
-// Rebuilds a streaming assistant message from pi >=0.84 `message_update` deltas.
+// Rebuilds a streaming assistant message from pi >=0.84 `message_update` deltas
+// (delta-only wire shape, unchanged through pi 1.5.0; see docs/json.md in the pi package).
 // Pure TS (no DOM/Lit) so it runs under node:test.
 import type { AssistantMessage, AssistantMessageEvent, Usage } from "../main/rpc/rpc-types";
 

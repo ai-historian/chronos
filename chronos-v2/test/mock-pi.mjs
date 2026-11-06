@@ -35,16 +35,29 @@ function respond(command, id, data) {
   send({ type: "response", command, id, success: true, data });
 }
 
+// get_state shape of pi 1.5.0 (steeringMode/followUpMode/autoCompactionEnabled
+// are present on the wire; the app ignores them).
 function state() {
   return {
     model,
     thinkingLevel: "off",
     isStreaming: false,
     isCompacting: false,
+    steeringMode: "one-at-a-time",
+    followUpMode: "one-at-a-time",
     sessionId: "mock-session-1",
+    autoCompactionEnabled: true,
     messageCount: 0,
     pendingMessageCount: 0,
   };
+}
+
+// Run boundary as pi 1.5.0 emits it: agent_end closes the low-level run
+// (willRetry says whether pi retries it), agent_settled says nothing more
+// happens automatically.
+function endRun(msg) {
+  send({ type: "agent_end", messages: [msg], willRetry: false });
+  send({ type: "agent_settled", aborted: false });
 }
 
 // Push a viewer event back to the extension (the agent→ext HTTP channel).
@@ -79,21 +92,22 @@ function assistant(text) {
 
 const USAGE = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 };
 
-// pi 0.84 streaming shape: message_start (empty content), message_update deltas
-// carrying `assistantMessageEvent` + `usage`, then message_end with the full message.
+// Streaming shape of pi >=0.84 (verified against 1.5.0): message_start with an
+// empty, stopReason "pending" snapshot; delta-only message_update events carrying
+// `assistantMessageEvent` + cumulative `usage`; message_end with the full message.
 function emitAssistant(text) {
   const msg = assistant(text);
   const update = (assistantMessageEvent) =>
     send({ type: "message_update", usage: USAGE, assistantMessageEvent });
   const half = text.startsWith("echo: ") ? "echo: " : text;
   send({ type: "agent_start" });
-  send({ type: "message_start", message: { ...msg, content: [] } });
+  send({ type: "message_start", message: { ...msg, content: [], stopReason: "pending" } });
   update({ type: "text_start", contentIndex: 0 });
   update({ type: "text_delta", contentIndex: 0, delta: half });
   update({ type: "text_delta", contentIndex: 0, delta: text.slice(half.length) });
   update({ type: "text_end", contentIndex: 0, content: text });
   send({ type: "message_end", message: msg });
-  send({ type: "agent_end", messages: [msg] });
+  endRun(msg);
 }
 
 function emitToolThenAssistant(toolName, text) {
@@ -105,10 +119,11 @@ function emitToolThenAssistant(toolName, text) {
     toolName,
     result: { content: [{ type: "text", text: "tool ok" }] },
     isError: false,
+    durationMs: 1,
   });
   const msg = assistant(text);
   send({ type: "message_end", message: msg });
-  send({ type: "agent_end", messages: [msg] });
+  endRun(msg);
 }
 
 // Blocking ui requests awaiting an extension_ui_response, keyed by id.
@@ -154,10 +169,11 @@ function handlePrompt(message) {
       toolName: "show_page",
       result: { content: [{ type: "text", text: "[view p.1]" }] },
       isError: false,
+      durationMs: 1,
     });
     const msg = assistant("shown page 1");
     send({ type: "message_end", message: msg });
-    send({ type: "agent_end", messages: [msg] });
+    endRun(msg);
   } else {
     emitAssistant(`echo: ${m}`);
   }
@@ -193,20 +209,33 @@ rl.on("line", (line) => {
     case "get_fork_messages":
       respond(type, id, { messages: [] });
       break;
+    case "get_available_thinking_levels":
+      respond(type, id, { levels: ["off"] });
+      break;
+    case "clear_queue":
+      respond(type, id, { steering: [], followUp: [] });
+      break;
     case "set_model":
       model = { ...model, id: cmd.modelId, provider: cmd.provider };
       respond(type, id, {});
       break;
     case "prompt":
+      // pi >=0.99: the response carries the input's disposition. A slash
+      // command is "handled" (no run starts); anything else starts a run.
+      handlePrompt(cmd.message);
+      respond(type, id, { disposition: (cmd.message || "").trim().startsWith("/") ? "handled" : "started" });
+      break;
     case "steer":
     case "follow_up":
       handlePrompt(cmd.message);
-      respond(type, id, {});
+      respond(type, id, { disposition: "queued" });
       break;
     case "new_session":
     case "switch_session":
-    case "fork":
       respond(type, id, { cancelled: false });
+      break;
+    case "fork":
+      respond(type, id, { text: "", cancelled: false });
       break;
     case "abort":
     case "compact":

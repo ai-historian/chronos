@@ -38,7 +38,8 @@ export interface MenuState {
   recent: { path: string }[];
 }
 
-const THINKING: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+// pi clamps a level the current model lacks to the nearest supported one.
+const THINKING: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const THEMES: { value: MenuState["theme"]; label: string }[] = [
   { value: "system", label: "System" },
   { value: "light", label: "Light" },

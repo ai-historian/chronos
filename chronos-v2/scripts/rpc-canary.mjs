@@ -5,6 +5,12 @@
 //  2. the chronos agent loaded (select-source command registered)
 //  3. get_available_models returns an array (no API key needed)
 //  4. no slash command is named after a chronos/prompts/*.md file
+//  5. with an Anthropic subscription (OAuth) credential in auth.json, the
+//     Claude 5.5 / Fable 5.1 models are offered — pi applies no per-model
+//     restriction for OAuth logins; Anthropic's API decides at request time
+//  6. a slash-command `prompt` answers with disposition "handled" (pi >=0.99)
+// The credential is a fake written into the temp PI_CODING_AGENT_DIR (never
+// ~/.pi); it is only ever read for the model listing, no request is sent.
 // Runs under plain Node via tsx: `node --import tsx scripts/rpc-canary.mjs`.
 
 import { spawn } from "node:child_process";
@@ -31,6 +37,13 @@ writeFileSync(
 const vendor = resolveVendorPaths({ isPackaged: false, resourcesPath: "", appRoot });
 // userDataDir is a temp dir, so PI_CODING_AGENT_DIR never touches ~/.pi.
 const launch = buildPiLaunch({ vendor, workspaceDir: workspace, userDataDir: tmp, httpPort: 1, execPath: process.execPath });
+// Same file/shape login.ts writes (writeAuthStore); expiry far enough out that pi never refreshes it.
+mkdirSync(launch.env.PI_CODING_AGENT_DIR, { recursive: true });
+writeFileSync(
+  join(launch.env.PI_CODING_AGENT_DIR, "auth.json"),
+  JSON.stringify({ anthropic: { type: "oauth", refresh: "canary-fake", access: "canary-fake", expires: Date.now() + 86_400_000 } }),
+);
+const EXPECTED_ANTHROPIC = ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"];
 console.log(`spawning ${launch.bin} ${launch.args.join(" ")}`);
 
 const proc = spawn(launch.bin, launch.args, {
@@ -103,6 +116,22 @@ try {
     .map((f) => f.slice(0, -3));
   const leaked = promptNames.filter((n) => names.includes(n));
   check("no prompt-file slash commands", leaked.length === 0, leaked.length ? `leaked: ${leaked.join(", ")}` : "");
+
+  const anthropicIds = (list ?? []).filter((m) => m.provider === "anthropic").map((m) => m.id);
+  const missing = EXPECTED_ANTHROPIC.filter((id) => !anthropicIds.includes(id));
+  check(
+    "Claude 5.5 / Fable 5.1 offered with an Anthropic OAuth credential",
+    missing.length === 0,
+    missing.length ? `missing: ${missing.join(", ")}` : `${anthropicIds.length} anthropic models`,
+  );
+
+  // /yolo only flips .chronos/settings.json in the temp workspace and notifies — no model run.
+  const yolo = await request({ type: "prompt", message: "/yolo" });
+  check(
+    "slash-command prompt is handled (disposition)",
+    yolo.success === true && yolo.data?.disposition === "handled",
+    `disposition: ${yolo.data?.disposition ?? "none"}`,
+  );
 
   console.log(failed ? "\nCANARY FAILED" : `\nOK: state, select-source, ${list?.length} models`);
 } catch (err) {

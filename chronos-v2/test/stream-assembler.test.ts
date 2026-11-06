@@ -31,7 +31,7 @@ test("thinking and text interleave by index", () => {
   a.apply({ type: "thinking_delta", contentIndex: 0, delta: "hm" });
   a.apply({ type: "text_start", contentIndex: 1 });
   a.apply({ type: "text_delta", contentIndex: 1, delta: "ok" });
-  a.apply({ type: "toolcall_start", contentIndex: 2 });
+  a.apply({ type: "toolcall_start", contentIndex: 2, id: "tc-1", toolName: "list_pages" });
   a.apply({ type: "toolcall_delta", contentIndex: 2, delta: '{"a"' });
   const mid = a.apply({ type: "thinking_delta", contentIndex: 0, delta: "m" });
   assert.deepEqual(mid!.content, [
